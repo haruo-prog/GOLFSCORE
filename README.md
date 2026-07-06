@@ -36,3 +36,5 @@ Android向けのゴルフスコア管理アプリです。
 ## Build trigger
 
 - 2026-07-06: Trigger APK build for v1.3.0 responsive UI.
+- 2026-07-06: Trigger APK build with captured logs.
+- 2026-07-06: Retry after spacer view fix.
