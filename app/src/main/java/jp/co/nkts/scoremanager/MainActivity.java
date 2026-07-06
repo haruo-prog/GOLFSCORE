@@ -28,8 +28,10 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
@@ -47,6 +49,8 @@ public class MainActivity extends Activity {
     private static final String KEY_LANG = "lang";
     private static final String KEY_HISTORY = "history";
     private static final String KEY_CLUBS = "clubs";
+    private static final int REQ_BACKUP_CREATE = 1101;
+    private static final int REQ_RESTORE_OPEN = 1102;
     private static final int SCREEN_HOME = 0, SCREEN_ROUND = 1, SCREEN_HISTORY = 2, SCREEN_ANALYSIS = 3, SCREEN_SETTINGS = 4;
     private static final int C_BG = 0xFFF8FAFC, C_CARD = 0xFFFFFFFF, C_TEXT = 0xFF0F172A, C_MUTED = 0xFF64748B, C_BORDER = 0xFFE2E8F0, C_PRIMARY = 0xFF166534, C_PRIMARY_DARK = 0xFF14532D, C_SOFT = 0xFFDCFCE7, C_PANEL = 0xFFEFF6FF, C_DANGER = 0xFFFEE2E2;
 
@@ -87,6 +91,16 @@ public class MainActivity extends Activity {
 
     @Override protected void onPause() { saveDraft(); super.onPause(); }
     @Override protected void onStop() { saveDraft(); super.onStop(); }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        if (requestCode == REQ_BACKUP_CREATE) {
+            writeBackupToUri(data.getData());
+        } else if (requestCode == REQ_RESTORE_OPEN) {
+            restoreBackupFromUri(data.getData());
+        }
+    }
 
     private View baseView() {
         scroll = new ScrollView(this);
@@ -433,7 +447,10 @@ public class MainActivity extends Activity {
         c.addView(section(t("club_set")));
         EditText clubs = input("DR,3W,5W,UT,5I,6I..."); clubs.setText(TextUtils.join(",", clubList())); c.addView(clubs);
         Button save = button(t("save"), true); save.setOnClickListener(v -> { prefs().edit().putString(KEY_CLUBS, clubs.getText().toString()).apply(); toast(t("saved")); }); c.addView(save, full());
-        c.addView(section(t("backup"))); c.addView(panel(t("offline_note"), false));
+        c.addView(section(t("backup")));
+        c.addView(panel(t("backup_note"), false));
+        Button backup = button(t("backup_save"), false); backup.setOnClickListener(v -> createBackupDocument()); c.addView(backup, full());
+        Button restore = button(t("restore_backup"), true); restore.setOnClickListener(v -> openBackupDocument()); c.addView(restore, full());
         root.addView(c); addNav(); top();
     }
 
@@ -474,6 +491,85 @@ public class MainActivity extends Activity {
         int w=842,h=595,m=28,y=m,pageNo=1; PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(w,h,pageNo).create()); Canvas c = page.getCanvas(); c.drawText("NK Golf Score", m, y, title); y += 24;
         for(String line:content.split("\n",-1)) for(String part:wrap(line,115)) { if(y>h-m){ pdf.finishPage(page); page=pdf.startPage(new PdfDocument.PageInfo.Builder(w,h,++pageNo).create()); c=page.getCanvas(); y=m; } c.drawText(part,m,y,p); y+=14; }
         pdf.finishPage(page); pdf.writeTo(out); pdf.close();
+    }
+
+    private void createBackupDocument() {
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("text/plain");
+        i.putExtra(Intent.EXTRA_TITLE, "NKGolfScore_Backup_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".txt");
+        startActivityForResult(i, REQ_BACKUP_CREATE);
+    }
+
+    private void openBackupDocument() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("text/*");
+        startActivityForResult(i, REQ_RESTORE_OPEN);
+    }
+
+    private void writeBackupToUri(Uri uri) {
+        try {
+            saveDraft();
+            OutputStream out = getContentResolver().openOutputStream(uri);
+            if (out == null) throw new Exception("openOutputStream failed");
+            out.write(buildBackupText().getBytes(StandardCharsets.UTF_8));
+            out.close();
+            toast(t("backup_saved"));
+        } catch (Exception e) {
+            toast(t("backup_failed"));
+        }
+    }
+
+    private void restoreBackupFromUri(Uri uri) {
+        try {
+            InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) throw new Exception("openInputStream failed");
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] data = new byte[8192];
+            int n;
+            while ((n = in.read(data)) > 0) buffer.write(data, 0, n);
+            in.close();
+            applyBackupText(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
+            initDefaults();
+            lang = prefs().getString(KEY_LANG, "en");
+            restoreDraft();
+            toast(t("restore_done"));
+            renderHome();
+        } catch (Exception e) {
+            toast(t("restore_failed"));
+        }
+    }
+
+    private String buildBackupText() {
+        StringBuilder b = new StringBuilder("NK_GOLF_SCORE_BACKUP_V23\n");
+        Map<String, ?> all = prefs().getAll();
+        for (Map.Entry<String, ?> e : all.entrySet()) {
+            Object v = e.getValue();
+            String key = enc(e.getKey());
+            if (v instanceof String) b.append("S|").append(key).append("|").append(enc((String) v)).append("\n");
+            else if (v instanceof Integer) b.append("I|").append(key).append("|").append(v).append("\n");
+            else if (v instanceof Boolean) b.append("B|").append(key).append("|").append(v).append("\n");
+            else if (v instanceof Long) b.append("L|").append(key).append("|").append(v).append("\n");
+        }
+        return b.toString();
+    }
+
+    private void applyBackupText(String raw) throws Exception {
+        if (TextUtils.isEmpty(raw) || !raw.startsWith("NK_GOLF_SCORE_BACKUP_V23")) throw new Exception("invalid backup");
+        SharedPreferences.Editor e = prefs().edit();
+        e.clear();
+        for (String line : raw.split("\n", -1)) {
+            if (TextUtils.isEmpty(line) || line.equals("NK_GOLF_SCORE_BACKUP_V23")) continue;
+            String[] p = line.split("\\|", -1);
+            if (p.length < 3) continue;
+            String key = dec(p[1]);
+            if ("S".equals(p[0])) e.putString(key, dec(p[2]));
+            else if ("I".equals(p[0])) e.putInt(key, num(p[2], 0));
+            else if ("B".equals(p[0])) e.putBoolean(key, Boolean.parseBoolean(p[2]));
+            else if ("L".equals(p[0])) e.putLong(key, longNum(p[2], 0L));
+        }
+        e.apply();
     }
 
     private void saveDraft() {
@@ -530,11 +626,11 @@ public class MainActivity extends Activity {
     private LinearLayout.LayoutParams weight(float w){ LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,w); p.setMargins(dp(2),dp(2),dp(2),dp(2)); return p; }
 
     private String t(String k){ String l=TextUtils.isEmpty(lang)?"en":lang; if("ja".equals(l))return ja(k); if("ko".equals(l))return ko(k); if("zh".equals(l))return zh(k); if("de".equals(l))return de(k); return en(k); }
-    private String en(String k){ switch(k){case"concept":return"The fastest golf score app. Works offline.";case"why":return"Why choose this app?";case"value_points":return"Offline / No ads / No subscription / No account / Fewer taps";case"language":return"Language";case"language_note":return"Choose on first launch. You can change it at the bottom anytime.";case"round":return"Round";case"start_round":return"Start Round";case"resume_round":return"Resume Round";case"history":return"History";case"analysis":return"Analysis";case"settings":return"Settings / Backup";case"settings_short":return"Settings";case"recent":return"Recent Stats";case"round_settings":return"Round Settings";case"course":return"Course";case"tee":return"Tee";case"start":return"Start time / OUT / IN";case"players":return"Players";case"player":return"Player";case"progress":return"Progress";case"missing":return"Missing";case"score_input":return"Score Input";case"prev":return"Prev Hole";case"next":return"Next Hole";case"ten_mode":return"10s mode: press 0-5";case"ten_error":return"10s mode supports 10-15 only.";case"clear":return"Clear";case"tee_result":return"Tee / Club / Result";case"left_rough":return"Left Rough";case"right_rough":return"Right Rough";case"left_ob":return"Left OB";case"right_ob":return"Right OB";case"finish":return"Finish";case"save_analysis":return"Save and View Analysis";case"cancel":return"Cancel / End";case"cancel_confirm":return"End score entry? You can return to input if this was a mistake.";case"back_input":return"Back to Input";case"back_home":return"Back Home";case"history_sub":return"Scorecards and PDF";case"analysis_sub":return"Club and trend analysis";case"settings_sub":return"Clubs and offline settings";case"club_set":return"Club Set";case"save":return"Save";case"backup":return"Backup";case"offline_note":return"This app works offline. Backup features can be added later.";case"no_history":return"No history yet.";case"detail":return"Detail";case"no_data":return"No data";case"club_analysis":return"Club Analysis";case"today_analysis":return"Today's Analysis";case"right_miss":return"Right-side misses are frequent.";case"left_miss":return"Left-side misses are frequent.";case"ob_advice":return"Multiple OBs. Consider clubbing down on tight holes.";case"used":return"used ";case"course_empty":return"No course";case"saved":return"Saved";case"pdf_saved":return"PDF saved";case"pdf_failed":return"PDF failed";}return k;}
-    private String ja(String k){ switch(k){case"concept":return"世界最速・オフライン対応のゴルフスコアアプリ";case"why":return"このアプリを選ぶ理由";case"value_points":return"オフライン / 広告なし / サブスクなし / アカウント不要 / 少ないタップ";case"language":return"言語選択";case"language_note":return"初回起動時に選択します。後から最下部で変更できます。";case"round":return"ラウンド";case"start_round":return"ラウンド開始";case"resume_round":return"入力中のラウンドに戻る";case"history":return"履歴";case"analysis":return"分析";case"settings":return"設定・バックアップ";case"settings_short":return"設定";case"recent":return"最近の成績";case"round_settings":return"ラウンド設定";case"course":return"コース名";case"tee":return"ティー";case"start":return"スタート時間 / OUT / IN";case"players":return"人数";case"player":return"同伴者";case"progress":return"進捗";case"missing":return"未入力";case"score_input":return"スコア入力";case"prev":return"前のH";case"next":return"次のH";case"ten_mode":return"10台入力中：0〜5を押す";case"ten_error":return"10台は10〜15のみです。";case"clear":return"未入力に戻す";case"tee_result":return"Tee / クラブ / 結果";case"left_rough":return"左ラフ";case"right_rough":return"右ラフ";case"left_ob":return"左OB";case"right_ob":return"右OB";case"finish":return"終了";case"save_analysis":return"保存して分析を見る";case"cancel":return"キャンセル終了";case"cancel_confirm":return"スコア登録を終了しますか？誤って押した場合は入力画面へ戻れます。";case"back_input":return"登録画面へ戻る";case"back_home":return"ホームへ戻る";case"history_sub":return"スコアカードとPDF";case"analysis_sub":return"クラブ別・傾向分析";case"settings_sub":return"クラブとオフライン設定";case"club_set":return"クラブセット";case"save":return"保存";case"backup":return"バックアップ";case"offline_note":return"このアプリはオフラインで動作します。バックアップ機能は今後拡張可能です。";case"no_history":return"履歴はまだありません。";case"detail":return"詳細";case"no_data":return"データなし";case"club_analysis":return"クラブ別分析";case"today_analysis":return"今日の自動分析";case"right_miss":return"右方向ミスが多い傾向です。";case"left_miss":return"左方向ミスが多い傾向です。";case"ob_advice":return"OBが複数回あります。狭いホールでは番手を落とす判断が有効です。";case"used":return"使用";case"course_empty":return"未入力コース";case"saved":return"保存しました";case"pdf_saved":return"PDF保存しました";case"pdf_failed":return"PDF保存失敗";}return en(k);}
-    private String ko(String k){ switch(k){case"language":return"언어 선택";case"concept":return"세계에서 가장 빠른 오프라인 골프 스코어 앱";case"start_round":return"라운드 시작";case"history":return"기록";case"analysis":return"분석";case"settings_short":return"설정";case"score_input":return"스코어 입력";case"save_analysis":return"저장하고 분석 보기";case"cancel":return"취소 종료";case"back_home":return"홈으로";case"saved":return"저장했습니다";}return en(k);}
-    private String zh(String k){ switch(k){case"language":return"语言选择";case"concept":return"世界最快的离线高尔夫记分应用";case"start_round":return"开始球局";case"history":return"历史";case"analysis":return"分析";case"settings_short":return"设置";case"score_input":return"成绩输入";case"save_analysis":return"保存并查看分析";case"cancel":return"取消结束";case"back_home":return"返回主页";case"saved":return"已保存";}return en(k);}
-    private String de(String k){ switch(k){case"language":return"Sprache";case"concept":return"Die schnellste Offline-Golfscore-App";case"start_round":return"Runde starten";case"history":return"Verlauf";case"analysis":return"Analyse";case"settings_short":return"Einstellungen";case"score_input":return"Score-Eingabe";case"save_analysis":return"Speichern und Analyse";case"cancel":return"Abbrechen / Ende";case"back_home":return"Zur Startseite";case"saved":return"Gespeichert";}return en(k);}
+    private String en(String k){ switch(k){case"concept":return"The fastest golf score app. Works offline.";case"why":return"Why choose this app?";case"value_points":return"Offline / No ads / No subscription / No account / Fewer taps";case"language":return"Language";case"language_note":return"Choose on first launch. You can change it at the bottom anytime.";case"round":return"Round";case"start_round":return"Start Round";case"resume_round":return"Resume Round";case"history":return"History";case"analysis":return"Analysis";case"settings":return"Settings / Backup";case"settings_short":return"Settings";case"recent":return"Recent Stats";case"round_settings":return"Round Settings";case"course":return"Course";case"tee":return"Tee";case"start":return"Start time / OUT / IN";case"players":return"Players";case"player":return"Player";case"progress":return"Progress";case"missing":return"Missing";case"score_input":return"Score Input";case"prev":return"Prev Hole";case"next":return"Next Hole";case"ten_mode":return"10s mode: press 0-5";case"ten_error":return"10s mode supports 10-15 only.";case"clear":return"Clear";case"tee_result":return"Tee / Club / Result";case"left_rough":return"Left Rough";case"right_rough":return"Right Rough";case"left_ob":return"Left OB";case"right_ob":return"Right OB";case"finish":return"Finish";case"save_analysis":return"Save and View Analysis";case"cancel":return"Cancel / End";case"cancel_confirm":return"End score entry? You can return to input if this was a mistake.";case"back_input":return"Back to Input";case"back_home":return"Back Home";case"history_sub":return"Scorecards and PDF";case"analysis_sub":return"Club and trend analysis";case"settings_sub":return"Clubs and backup";case"club_set":return"Club Set";case"save":return"Save";case"backup":return"Backup / Restore";case"backup_note":return"Save a backup file to Google Drive, then restore from that file on this or another device.";case"backup_save":return"Save Backup";case"restore_backup":return"Restore from Backup";case"backup_saved":return"Backup saved";case"backup_failed":return"Backup failed";case"restore_done":return"Restored";case"restore_failed":return"Restore failed";case"no_history":return"No history yet.";case"detail":return"Detail";case"no_data":return"No data";case"club_analysis":return"Club Analysis";case"today_analysis":return"Today's Analysis";case"right_miss":return"Right-side misses are frequent.";case"left_miss":return"Left-side misses are frequent.";case"ob_advice":return"Multiple OBs. Consider clubbing down on tight holes.";case"used":return"used ";case"course_empty":return"No course";case"saved":return"Saved";case"pdf_saved":return"PDF saved";case"pdf_failed":return"PDF failed";}return k;}
+    private String ja(String k){ switch(k){case"concept":return"世界最速・オフライン対応のゴルフスコアアプリ";case"why":return"このアプリを選ぶ理由";case"value_points":return"オフライン / 広告なし / サブスクなし / アカウント不要 / 少ないタップ";case"language":return"言語選択";case"language_note":return"初回起動時に選択します。後から最下部で変更できます。";case"round":return"ラウンド";case"start_round":return"ラウンド開始";case"resume_round":return"入力中のラウンドに戻る";case"history":return"履歴";case"analysis":return"分析";case"settings":return"設定・バックアップ";case"settings_short":return"設定";case"recent":return"最近の成績";case"round_settings":return"ラウンド設定";case"course":return"コース名";case"tee":return"ティー";case"start":return"スタート時間 / OUT / IN";case"players":return"人数";case"player":return"同伴者";case"progress":return"進捗";case"missing":return"未入力";case"score_input":return"スコア入力";case"prev":return"前のH";case"next":return"次のH";case"ten_mode":return"10台入力中：0〜5を押す";case"ten_error":return"10台は10〜15のみです。";case"clear":return"未入力に戻す";case"tee_result":return"Tee / クラブ / 結果";case"left_rough":return"左ラフ";case"right_rough":return"右ラフ";case"left_ob":return"左OB";case"right_ob":return"右OB";case"finish":return"終了";case"save_analysis":return"保存して分析を見る";case"cancel":return"キャンセル終了";case"cancel_confirm":return"スコア登録を終了しますか？誤って押した場合は入力画面へ戻れます。";case"back_input":return"登録画面へ戻る";case"back_home":return"ホームへ戻る";case"history_sub":return"スコアカードとPDF";case"analysis_sub":return"クラブ別・傾向分析";case"settings_sub":return"クラブとバックアップ";case"club_set":return"クラブセット";case"save":return"保存";case"backup":return"バックアップ / 復元";case"backup_note":return"Google Driveなどにバックアップファイルを保存し、この端末または別端末でそのファイルから復元できます。";case"backup_save":return"バックアップ保存";case"restore_backup":return"バックアップから復元";case"backup_saved":return"バックアップ保存しました";case"backup_failed":return"バックアップ失敗";case"restore_done":return"復元しました";case"restore_failed":return"復元失敗";case"no_history":return"履歴はまだありません。";case"detail":return"詳細";case"no_data":return"データなし";case"club_analysis":return"クラブ別分析";case"today_analysis":return"今日の自動分析";case"right_miss":return"右方向ミスが多い傾向です。";case"left_miss":return"左方向ミスが多い傾向です。";case"ob_advice":return"OBが複数回あります。狭いホールでは番手を落とす判断が有効です。";case"used":return"使用";case"course_empty":return"未入力コース";case"saved":return"保存しました";case"pdf_saved":return"PDF保存しました";case"pdf_failed":return"PDF保存失敗";}return en(k);}
+    private String ko(String k){ switch(k){case"language":return"언어 선택";case"concept":return"세계에서 가장 빠른 오프라인 골프 스코어 앱";case"start_round":return"라운드 시작";case"history":return"기록";case"analysis":return"분석";case"settings_short":return"설정";case"score_input":return"스코어 입력";case"save_analysis":return"저장하고 분석 보기";case"cancel":return"취소 종료";case"back_home":return"홈으로";case"backup":return"백업 / 복원";case"backup_save":return"백업 저장";case"restore_backup":return"백업에서 복원";case"backup_saved":return"백업 저장 완료";case"restore_done":return"복원 완료";case"saved":return"저장했습니다";}return en(k);}
+    private String zh(String k){ switch(k){case"language":return"语言选择";case"concept":return"世界最快的离线高尔夫记分应用";case"start_round":return"开始球局";case"history":return"历史";case"analysis":return"分析";case"settings_short":return"设置";case"score_input":return"成绩输入";case"save_analysis":return"保存并查看分析";case"cancel":return"取消结束";case"back_home":return"返回主页";case"backup":return"备份 / 恢复";case"backup_save":return"保存备份";case"restore_backup":return"从备份恢复";case"backup_saved":return"备份已保存";case"restore_done":return"已恢复";case"saved":return"已保存";}return en(k);}
+    private String de(String k){ switch(k){case"language":return"Sprache";case"concept":return"Die schnellste Offline-Golfscore-App";case"start_round":return"Runde starten";case"history":return"Verlauf";case"analysis":return"Analyse";case"settings_short":return"Einstellungen";case"score_input":return"Score-Eingabe";case"save_analysis":return"Speichern und Analyse";case"cancel":return"Abbrechen / Ende";case"back_home":return"Zur Startseite";case"backup":return"Backup / Wiederherstellen";case"backup_save":return"Backup speichern";case"restore_backup":return"Backup wiederherstellen";case"backup_saved":return"Backup gespeichert";case"restore_done":return"Wiederhergestellt";case"saved":return"Gespeichert";}return en(k);}
 
     private String displayName(int p){ return TextUtils.isEmpty(names[p])?"Player "+(p+1):names[p].trim(); }
     private String courseOrDefault(){ return TextUtils.isEmpty(course)?t("course_empty"):course; }
@@ -546,6 +642,7 @@ public class MainActivity extends Activity {
     private String one(double d){ return String.format(Locale.US,"%.1f",d); }
     private int bound(int v,int min,int max){ return Math.max(min,Math.min(max,v)); }
     private int num(String s,int f){ try{return Integer.parseInt(s.trim());}catch(Exception e){return f;} }
+    private long longNum(String s,long f){ try{return Long.parseLong(s.trim());}catch(Exception e){return f;} }
     private String nowDate(){ return new SimpleDateFormat("yyyy/MM/dd",Locale.US).format(new Date()); }
     private int dp(int v){ return (int)(v*getResources().getDisplayMetrics().density+0.5f); }
     private SharedPreferences prefs(){ return getSharedPreferences(PREF,MODE_PRIVATE); }
