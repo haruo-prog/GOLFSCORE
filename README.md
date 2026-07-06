@@ -32,3 +32,7 @@ Android向けのゴルフスコア管理アプリです。
 ## GitHub Actions
 
 `.github/workflows/build-apk.yml` により、pushまたは手動実行でdebug APKを生成します。
+
+## Build request
+
+- APK artifact request: 2026-07-06 v1.3.0
