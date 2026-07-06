@@ -38,7 +38,24 @@ jobs:
           gradle-version: '8.10.2'
 
       - name: Build debug APK
-        run: gradle assembleDebug
+        id: build_apk
+        run: |
+          set +e
+          gradle assembleDebug --stacktrace 2>&1 | tee build-output.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          echo "exit_code=${BUILD_EXIT}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NK-Score-Manager-build-log
+          path: build-output.log
+
+      - name: Stop when build failed
+        if: steps.build_apk.outputs.exit_code != '0'
+        run: exit ${{ steps.build_apk.outputs.exit_code }}
 
       - name: Prepare release APK
         run: |
