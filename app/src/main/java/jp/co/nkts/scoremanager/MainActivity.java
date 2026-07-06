@@ -83,7 +83,6 @@ public class MainActivity extends Activity {
 
     private final int[] defaultPars = {4,4,3,5,4,4,5,3,4,4,5,4,3,4,4,5,3,4};
     private final String[] playerCountOptions = {"1名", "2名", "3名", "4名"};
-    private final String[] teeResultLabels = {"未選択", "FW", "左ラフ", "右ラフ", "左OB", "右OB"};
     private LinearLayout root;
     private ScrollView scroll;
     private TextView saveStatus;
@@ -348,7 +347,7 @@ public class MainActivity extends Activity {
             renderRound(true);
             return;
         }
-        int digit = parseInt(key, -1);
+        int digit = num(key, -1);
         if (digit < 0) return;
         if (tensPendingPlayer == player) {
             if (digit <= 5) {
