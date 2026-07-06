@@ -39,3 +39,7 @@ Android向けのゴルフスコア管理アプリです。
 ## GitHub Actions
 
 `.github/workflows/build-apk.yml` により、pushまたは手動実行でdebug APKを生成します。
+
+## Build trigger
+
+- 2026-07-06: Build score input app 1.5.0.
