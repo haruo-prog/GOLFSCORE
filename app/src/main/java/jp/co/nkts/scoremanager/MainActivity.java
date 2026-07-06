@@ -4,16 +4,22 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.pdf.PdfDocument;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -32,13 +38,18 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Map;
 
 public class MainActivity extends Activity {
     private static final int HOLES = 18;
@@ -48,6 +59,13 @@ public class MainActivity extends Activity {
     private static final String PREF_NAME = "nk_score_manager_beta";
     private static final String KEY_PREFIX = "v16_";
     private static final String KEY_HISTORY = "v16_history";
+    private static final String KEY_PDF_TREE_URI = "v17_pdf_tree_uri";
+    private static final String KEY_LAST_CLUB_PHOTO = "v17_last_club_photo";
+
+    private static final int REQ_PDF_FOLDER = 701;
+    private static final int REQ_BACKUP_CREATE = 702;
+    private static final int REQ_RESTORE_OPEN = 703;
+    private static final int REQ_CLUB_CAMERA = 704;
 
     private static final int COLOR_BG = 0xFFF8FAFC;
     private static final int COLOR_CARD = 0xFFFFFFFF;
@@ -78,6 +96,7 @@ public class MainActivity extends Activity {
     private boolean registrationMode = false;
     private String selectedHistoryDetail = "";
     private String selectedScoreCard = "";
+    private String clubPhotoPath = "";
 
     private final int[] pars = new int[HOLES];
     private final String[] playerNames = {"Player 1", "Player 2", "Player 3", "Player 4"};
@@ -127,6 +146,50 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null) return;
+
+        if (requestCode == REQ_PDF_FOLDER) {
+            Uri uri = data.getData();
+            if (uri == null) return;
+            int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            try {
+                getContentResolver().takePersistableUriPermission(uri, flags);
+            } catch (Exception ignored) {}
+            getPrefs().edit().putString(KEY_PDF_TREE_URI, uri.toString()).commit();
+            Toast.makeText(this, "PDF保存先を記憶しました。", Toast.LENGTH_LONG).show();
+            renderHomeScreen();
+            return;
+        }
+
+        if (requestCode == REQ_BACKUP_CREATE) {
+            Uri uri = data.getData();
+            if (uri != null) writeBackupToUri(uri);
+            return;
+        }
+
+        if (requestCode == REQ_RESTORE_OPEN) {
+            Uri uri = data.getData();
+            if (uri != null) restoreBackupFromUri(uri);
+            return;
+        }
+
+        if (requestCode == REQ_CLUB_CAMERA) {
+            Bitmap bitmap = null;
+            Bundle extras = data.getExtras();
+            if (extras != null) {
+                Object raw = extras.get("data");
+                if (raw instanceof Bitmap) bitmap = (Bitmap) raw;
+            }
+            if (bitmap == null) {
+                Toast.makeText(this, "写真を取得できませんでした。", Toast.LENGTH_LONG).show();
+                return;
+            }
+            saveClubPhotoWebp(bitmap);
+        }
+    }
+
     private View createBaseView() {
         scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
@@ -150,6 +213,7 @@ public class MainActivity extends Activity {
         root.removeAllViews();
         root.addView(createHeroCard());
         root.addView(createHomeActionCard());
+        root.addView(createStorageCard());
         root.addView(createStatsCard());
         root.addView(createHistoryCard());
         saveStatusText = text("保存状態: ホーム表示中", 13, COLOR_MUTED, false);
@@ -171,7 +235,7 @@ public class MainActivity extends Activity {
         TextView title = text("NK Score Manager", 27, COLOR_TEXT, true);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         card.addView(title);
-        TextView sub = text("候補ボタン入力・スコアカードPDF V1.6.1", 14, COLOR_MUTED, false);
+        TextView sub = text("PDF保存先記憶・Driveバックアップ・クラブ写真 V1.7", 14, COLOR_MUTED, false);
         sub.setGravity(Gravity.CENTER_HORIZONTAL);
         sub.setPadding(0, dp(4), 0, 0);
         card.addView(sub);
@@ -205,6 +269,27 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    private View createStorageCard() {
+        LinearLayout card = card();
+        card.addView(sectionCompact("保存・バックアップ"));
+        String pdfUri = getPrefs().getString(KEY_PDF_TREE_URI, "");
+        String current = TextUtils.isEmpty(pdfUri) ? "未設定：アプリ内部Documentsに保存" : "設定済み：選択した保存先を記憶中";
+        card.addView(panel("PDF保存先：" + current + "\nGoogle Driveフォルダを選択すると、PDFをDrive側へ保存できます。", false));
+
+        Button pdfFolder = button("PDF保存先を指定・変更", true);
+        pdfFolder.setOnClickListener(v -> choosePdfFolder());
+        card.addView(pdfFolder, fullWidthButtonParams());
+
+        Button backup = button("Google Driveへバックアップ", false);
+        backup.setOnClickListener(v -> createBackupDocument());
+        card.addView(backup, fullWidthButtonParams());
+
+        Button restore = button("Google Driveからリストア", false);
+        restore.setOnClickListener(v -> openBackupDocument());
+        card.addView(restore, fullWidthButtonParams());
+        return card;
+    }
+
     private View createStatsCard() {
         LinearLayout card = card();
         card.addView(sectionCompact("平均・傾向"));
@@ -224,13 +309,15 @@ public class MainActivity extends Activity {
             for (int i = 0; i < records.size() && i < 30; i++) {
                 RoundRecord record = records.get(i);
                 LinearLayout row = cardLite();
-                row.addView(text(record.date + "  " + record.course + "\nPlayer1 TOTAL: " + record.total + " / PAT: " + record.putts + " / FW: " + record.fwKeep + "/" + record.fwTarget, 13, COLOR_TEXT, true));
+                String photo = TextUtils.isEmpty(record.clubPhotoPath) ? "クラブ写真なし" : "クラブ写真あり";
+                row.addView(text(record.date + "  " + record.course + "\nPlayer1 TOTAL: " + record.total + " / PAT: " + record.putts + " / FW: " + record.fwKeep + "/" + record.fwTarget + " / " + photo, 13, COLOR_TEXT, true));
                 LinearLayout actions = new LinearLayout(this);
                 actions.setOrientation(LinearLayout.HORIZONTAL);
                 Button detail = button("詳細", false);
                 detail.setOnClickListener(v -> {
                     selectedHistoryDetail = record.detail;
                     selectedScoreCard = record.scoreCard;
+                    clubPhotoPath = record.clubPhotoPath;
                     renderHomeScreen();
                 });
                 Button pdf = button("PDF", true);
@@ -244,7 +331,8 @@ public class MainActivity extends Activity {
 
         if (!TextUtils.isEmpty(selectedScoreCard) || !TextUtils.isEmpty(selectedHistoryDetail)) {
             card.addView(sectionCompact("選択中のスコアカード"));
-            card.addView(panel(TextUtils.isEmpty(selectedScoreCard) ? selectedHistoryDetail : selectedScoreCard, false));
+            String photoLine = TextUtils.isEmpty(clubPhotoPath) ? "" : "\n\n当日クラブ写真WebP: " + clubPhotoPath;
+            card.addView(panel((TextUtils.isEmpty(selectedScoreCard) ? selectedHistoryDetail : selectedScoreCard) + photoLine, false));
             Button pdf = button("選択中の履歴をPDF出力", true);
             pdf.setOnClickListener(v -> exportPdf(selectedScoreCard, selectedHistoryDetail));
             card.addView(pdf, fullWidthButtonParams());
@@ -565,6 +653,14 @@ public class MainActivity extends Activity {
         save.setOnClickListener(v -> saveDraft(true));
         area.addView(save, fullWidthButtonParams());
 
+        Button photo = button("当日使ったクラブを撮影して記録", false);
+        photo.setOnClickListener(v -> captureClubPhoto());
+        area.addView(photo, fullWidthButtonParams());
+
+        if (!TextUtils.isEmpty(clubPhotoPath)) {
+            area.addView(panel("クラブ写真WebP保存済み\n" + clubPhotoPath, false));
+        }
+
         Button pdfPreview = button("現在のスコアカードをPDF出力", false);
         pdfPreview.setOnClickListener(v -> exportPdf(buildScoreCardText(true), buildExportText()));
         area.addView(pdfPreview, fullWidthButtonParams());
@@ -641,7 +737,9 @@ public class MainActivity extends Activity {
         StringBuilder b = new StringBuilder();
         b.append("SCORE CARD\n");
         b.append(dateText).append("  ").append(TextUtils.isEmpty(courseText) ? "未入力" : courseText).append("\n");
-        b.append("TEE: ").append(teeText).append("  START: ").append(startTimeText).append("\n\n");
+        b.append("TEE: ").append(teeText).append("  START: ").append(startTimeText).append("\n");
+        if (!TextUtils.isEmpty(clubPhotoPath)) b.append("CLUB PHOTO WEBP: ").append(clubPhotoPath).append("\n");
+        b.append("\n");
         b.append("HOLE  1  2  3  4  5  6  7  8  9 |OUT|10 11 12 13 14 15 16 17 18 |IN |TOTAL\n");
         b.append("PAR  ").append(rowValues(pars, -1)).append("\n");
         for (int p = 0; p < activePlayers; p++) b.append(shortName(displayPlayerName(p))).append("   ").append(rowValues(scores[p], p)).append("\n");
@@ -680,12 +778,13 @@ public class MainActivity extends Activity {
 
     private String buildExportText() {
         StringBuilder builder = new StringBuilder();
-        builder.append("NK Score Export V1.6.1\n");
+        builder.append("NK Score Export V1.7\n");
         builder.append("日付: ").append(dateText).append("\n");
         builder.append("コース: ").append(courseText).append("\n");
         builder.append("ティー: ").append(teeText).append("\n");
         builder.append("スタート: ").append(startTimeText).append("\n");
         builder.append("人数: ").append(activePlayers).append("名\n");
+        if (!TextUtils.isEmpty(clubPhotoPath)) builder.append("クラブ写真WebP: ").append(clubPhotoPath).append("\n");
         builder.append("====================\n");
         for (int h = 0; h < HOLES; h++) {
             builder.append(h + 1).append("H / PAR:").append(pars[h]).append("\n");
@@ -717,11 +816,100 @@ public class MainActivity extends Activity {
         record.fwTarget = countTeeTargets();
         record.detail = export;
         record.scoreCard = scoreCard;
+        record.clubPhotoPath = clubPhotoPath;
         return record;
+    }
+
+    private void choosePdfFolder() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(intent, REQ_PDF_FOLDER);
+    }
+
+    private void createBackupDocument() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/plain");
+        intent.putExtra(Intent.EXTRA_TITLE, "NKScore_Backup_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".txt");
+        startActivityForResult(intent, REQ_BACKUP_CREATE);
+    }
+
+    private void openBackupDocument() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/*");
+        startActivityForResult(intent, REQ_RESTORE_OPEN);
+    }
+
+    private void captureClubPhoto() {
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        try {
+            startActivityForResult(intent, REQ_CLUB_CAMERA);
+        } catch (Exception e) {
+            Toast.makeText(this, "カメラを起動できませんでした。", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void saveClubPhotoWebp(Bitmap bitmap) {
+        try {
+            File dir = new File(getFilesDir(), "club_photos");
+            if (!dir.exists()) dir.mkdirs();
+            File file = new File(dir, "club_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".webp");
+            FileOutputStream out = new FileOutputStream(file);
+            if (Build.VERSION.SDK_INT >= 30) {
+                bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 70, out);
+            } else {
+                bitmap.compress(Bitmap.CompressFormat.WEBP, 70, out);
+            }
+            out.close();
+            clubPhotoPath = file.getAbsolutePath();
+            getPrefs().edit().putString(KEY_LAST_CLUB_PHOTO, clubPhotoPath).commit();
+            saveDraft(false);
+            Toast.makeText(this, "クラブ写真をWebPで軽量保存しました。", Toast.LENGTH_LONG).show();
+            renderRegistrationScreen(true);
+        } catch (Exception e) {
+            Toast.makeText(this, "クラブ写真の保存に失敗しました。", Toast.LENGTH_LONG).show();
+        }
     }
 
     private void exportPdf(String scoreCard, String detail) {
         String content = (TextUtils.isEmpty(scoreCard) ? "SCORE CARD\n" : scoreCard) + "\n\nDETAIL\n" + (TextUtils.isEmpty(detail) ? "" : detail);
+        String fileName = "NKScore_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".pdf";
+        String tree = getPrefs().getString(KEY_PDF_TREE_URI, "");
+        if (!TextUtils.isEmpty(tree)) {
+            try {
+                Uri treeUri = Uri.parse(tree);
+                Uri parent = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri));
+                Uri fileUri = DocumentsContract.createDocument(getContentResolver(), parent, "application/pdf", fileName);
+                if (fileUri == null) throw new Exception("createDocument returned null");
+                OutputStream out = getContentResolver().openOutputStream(fileUri);
+                if (out == null) throw new Exception("openOutputStream returned null");
+                writePdfToStream(content, out);
+                out.close();
+                copyText("NK Score PDF URI", fileUri.toString());
+                Toast.makeText(this, "指定保存先へPDF保存しました。保存先URIをコピーしました。", Toast.LENGTH_LONG).show();
+                return;
+            } catch (Exception e) {
+                Toast.makeText(this, "指定保存先へのPDF保存に失敗。内部保存に切替えます。", Toast.LENGTH_LONG).show();
+            }
+        }
+
+        try {
+            File dir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
+            if (dir == null) dir = getFilesDir();
+            if (!dir.exists()) dir.mkdirs();
+            File file = new File(dir, fileName);
+            FileOutputStream out = new FileOutputStream(file);
+            writePdfToStream(content, out);
+            out.close();
+            copyText("NK Score PDF Path", file.getAbsolutePath());
+            Toast.makeText(this, "PDFを内部保存しました。パスをコピーしました。", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "PDF保存に失敗しました。", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void writePdfToStream(String content, OutputStream out) throws Exception {
         PdfDocument pdf = new PdfDocument();
         Paint paint = new Paint();
         paint.setTextSize(10f);
@@ -756,23 +944,112 @@ public class MainActivity extends Activity {
             }
         }
         pdf.finishPage(page);
+        pdf.writeTo(out);
+        pdf.close();
+    }
 
+    private void writeBackupToUri(Uri uri) {
         try {
-            File dir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
-            if (dir == null) dir = getFilesDir();
-            if (!dir.exists()) dir.mkdirs();
-            File file = new File(dir, "NKScore_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".pdf");
-            FileOutputStream out = new FileOutputStream(file);
-            pdf.writeTo(out);
+            String backup = buildBackupText();
+            OutputStream out = getContentResolver().openOutputStream(uri);
+            if (out == null) throw new Exception("openOutputStream failed");
+            out.write(backup.getBytes(StandardCharsets.UTF_8));
             out.close();
-            pdf.close();
-            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("NK Score PDF Path", file.getAbsolutePath()));
-            Toast.makeText(this, "PDFを保存しました。パスをコピーしました。", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "バックアップを保存しました。", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
-            pdf.close();
-            Toast.makeText(this, "PDF保存に失敗しました。", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "バックアップ保存に失敗しました。", Toast.LENGTH_LONG).show();
         }
+    }
+
+    private void restoreBackupFromUri(Uri uri) {
+        try {
+            InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) throw new Exception("openInputStream failed");
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] data = new byte[8192];
+            int n;
+            while ((n = in.read(data)) > 0) buffer.write(data, 0, n);
+            in.close();
+            applyBackupText(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
+            initDefaults();
+            restoreDraft();
+            Toast.makeText(this, "バックアップからリストアしました。", Toast.LENGTH_LONG).show();
+            renderHomeScreen();
+        } catch (Exception e) {
+            Toast.makeText(this, "リストアに失敗しました。", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private String buildBackupText() {
+        StringBuilder b = new StringBuilder();
+        b.append("NKSM_BACKUP_V1\n");
+        Map<String, ?> all = getPrefs().getAll();
+        for (Map.Entry<String, ?> entry : all.entrySet()) {
+            Object value = entry.getValue();
+            String key = encode(entry.getKey());
+            if (value instanceof String) b.append("S|").append(key).append("|").append(encode((String) value)).append("\n");
+            else if (value instanceof Integer) b.append("I|").append(key).append("|").append(value).append("\n");
+            else if (value instanceof Boolean) b.append("B|").append(key).append("|").append(value).append("\n");
+            else if (value instanceof Long) b.append("L|").append(key).append("|").append(value).append("\n");
+        }
+        File photoDir = new File(getFilesDir(), "club_photos");
+        File[] files = photoDir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isFile() && file.getName().endsWith(".webp")) {
+                    b.append("P|").append(encode(file.getName())).append("|").append(encodeFile(file)).append("\n");
+                }
+            }
+        }
+        return b.toString();
+    }
+
+    private void applyBackupText(String backup) throws Exception {
+        if (TextUtils.isEmpty(backup) || !backup.startsWith("NKSM_BACKUP_V1")) throw new Exception("invalid backup");
+        SharedPreferences.Editor editor = getPrefs().edit();
+        editor.clear();
+        String[] lines = backup.split("\n", -1);
+        for (String line : lines) {
+            if (TextUtils.isEmpty(line) || line.equals("NKSM_BACKUP_V1")) continue;
+            String[] parts = line.split("\\|", -1);
+            if (parts.length < 3) continue;
+            if ("P".equals(parts[0])) {
+                restorePhotoFile(decode(parts[1]), parts[2]);
+                continue;
+            }
+            String key = decode(parts[1]);
+            if ("S".equals(parts[0])) editor.putString(key, decode(parts[2]));
+            else if ("I".equals(parts[0])) editor.putInt(key, parseInt(parts[2], 0));
+            else if ("B".equals(parts[0])) editor.putBoolean(key, Boolean.parseBoolean(parts[2]));
+            else if ("L".equals(parts[0])) editor.putLong(key, parseLong(parts[2], 0L));
+        }
+        editor.commit();
+    }
+
+    private String encodeFile(File file) {
+        try {
+            FileInputStream in = new FileInputStream(file);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int n;
+            while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
+            in.close();
+            return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void restorePhotoFile(String name, String base64) {
+        try {
+            if (TextUtils.isEmpty(name) || TextUtils.isEmpty(base64)) return;
+            File dir = new File(getFilesDir(), "club_photos");
+            if (!dir.exists()) dir.mkdirs();
+            File file = new File(dir, name);
+            FileOutputStream out = new FileOutputStream(file);
+            out.write(Base64.decode(base64, Base64.NO_WRAP));
+            out.close();
+        } catch (Exception ignored) {}
     }
 
     private ArrayList<String> wrapLine(String line, int maxChars) {
@@ -820,7 +1097,7 @@ public class MainActivity extends Activity {
     }
 
     private void saveDraft(boolean showToast) {
-        SharedPreferences.Editor editor = getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit();
+        SharedPreferences.Editor editor = getPrefs().edit();
         editor.putBoolean(KEY_PREFIX + "registrationMode", registrationMode);
         editor.putString(KEY_PREFIX + "date", dateText);
         editor.putString(KEY_PREFIX + "course", courseText);
@@ -835,6 +1112,7 @@ public class MainActivity extends Activity {
         editor.putString(KEY_PREFIX + "directions", serializeIntArray(directions));
         editor.putString(KEY_PREFIX + "selectedDetail", encode(selectedHistoryDetail));
         editor.putString(KEY_PREFIX + "selectedScoreCard", encode(selectedScoreCard));
+        editor.putString(KEY_LAST_CLUB_PHOTO, clubPhotoPath);
         for (int p = 0; p < PLAYERS; p++) editor.putString(KEY_PREFIX + "scores_" + p, serializeIntArray(scores[p]));
         editor.putString(KEY_PREFIX + "lastSaved", nowFull());
         boolean ok = editor.commit();
@@ -843,7 +1121,7 @@ public class MainActivity extends Activity {
     }
 
     private void restoreDraft() {
-        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+        SharedPreferences prefs = getPrefs();
         registrationMode = prefs.getBoolean(KEY_PREFIX + "registrationMode", false);
         dateText = prefs.getString(KEY_PREFIX + "date", nowDate());
         courseText = prefs.getString(KEY_PREFIX + "course", "");
@@ -853,6 +1131,7 @@ public class MainActivity extends Activity {
         currentHole = bound(prefs.getInt(KEY_PREFIX + "currentHole", 0), 0, HOLES - 1);
         selectedHistoryDetail = decode(prefs.getString(KEY_PREFIX + "selectedDetail", ""));
         selectedScoreCard = decode(prefs.getString(KEY_PREFIX + "selectedScoreCard", ""));
+        clubPhotoPath = prefs.getString(KEY_LAST_CLUB_PHOTO, "");
         restoreIntArray(prefs.getString(KEY_PREFIX + "pars", ""), pars, defaultPars, 3, 6);
         restoreStringArray(prefs.getString(KEY_PREFIX + "names", ""), playerNames);
         restoreIntArray(prefs.getString(KEY_PREFIX + "putts", ""), player1Putts, null, 0, 8);
@@ -868,6 +1147,7 @@ public class MainActivity extends Activity {
         startTimeText = "";
         activePlayers = 1;
         currentHole = 0;
+        clubPhotoPath = "";
         System.arraycopy(defaultPars, 0, pars, 0, HOLES);
         for (int p = 0; p < PLAYERS; p++) {
             playerNames[p] = "Player " + (p + 1);
@@ -882,7 +1162,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean hasAnyDraft() {
-        if (!TextUtils.isEmpty(courseText) || !TextUtils.isEmpty(teeText) || !TextUtils.isEmpty(startTimeText)) return true;
+        if (!TextUtils.isEmpty(courseText) || !TextUtils.isEmpty(teeText) || !TextUtils.isEmpty(startTimeText) || !TextUtils.isEmpty(clubPhotoPath)) return true;
         for (int p = 0; p < PLAYERS; p++) for (int h = 0; h < HOLES; h++) if (scores[p][h] > 0) return true;
         return false;
     }
@@ -936,7 +1216,7 @@ public class MainActivity extends Activity {
 
     private ArrayList<RoundRecord> loadHistoryRecords() {
         ArrayList<RoundRecord> records = new ArrayList<>();
-        String raw = getSharedPreferences(PREF_NAME, MODE_PRIVATE).getString(KEY_HISTORY, "");
+        String raw = getPrefs().getString(KEY_HISTORY, "");
         if (TextUtils.isEmpty(raw)) return records;
         String[] lines = raw.split("\n", -1);
         for (String line : lines) {
@@ -950,7 +1230,7 @@ public class MainActivity extends Activity {
     private void saveHistoryRecords(ArrayList<RoundRecord> records) {
         ArrayList<String> lines = new ArrayList<>();
         for (int i = 0; i < records.size() && i < 200; i++) lines.add(records.get(i).toLine());
-        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit().putString(KEY_HISTORY, TextUtils.join("\n", lines)).commit();
+        getPrefs().edit().putString(KEY_HISTORY, TextUtils.join("\n", lines)).commit();
     }
 
     private void attachTextWatcher(EditText editText, TextValueSink sink) {
@@ -1145,6 +1425,14 @@ public class MainActivity extends Activity {
         }
     }
 
+    private long parseLong(String text, long fallback) {
+        try {
+            return Long.parseLong(text.trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
     private long parseDateMillis(String date) {
         try {
             Date parsed = new SimpleDateFormat("yyyy/MM/dd", Locale.US).parse(date);
@@ -1164,6 +1452,15 @@ public class MainActivity extends Activity {
 
     private String nowFull() {
         return new SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.US).format(new Date());
+    }
+
+    private SharedPreferences getPrefs() {
+        return getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+    }
+
+    private void copyText(String label, String value) {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText(label, value));
     }
 
     private void startAutoSaveTimer() {
@@ -1209,9 +1506,10 @@ public class MainActivity extends Activity {
         int fwTarget;
         String detail;
         String scoreCard;
+        String clubPhotoPath;
 
         String toLine() {
-            return timestamp + "|" + enc(date) + "|" + enc(course) + "|" + total + "|" + parTotal + "|" + putts + "|" + fwKeep + "|" + fwTarget + "|" + enc(detail) + "|" + enc(scoreCard);
+            return timestamp + "|" + enc(date) + "|" + enc(course) + "|" + total + "|" + parTotal + "|" + putts + "|" + fwKeep + "|" + fwTarget + "|" + enc(detail) + "|" + enc(scoreCard) + "|" + enc(clubPhotoPath);
         }
 
         static RoundRecord fromLine(String line) {
@@ -1229,6 +1527,7 @@ public class MainActivity extends Activity {
                 r.fwTarget = Integer.parseInt(parts[7]);
                 r.detail = dec(parts[8]);
                 r.scoreCard = parts.length > 9 ? dec(parts[9]) : r.detail;
+                r.clubPhotoPath = parts.length > 10 ? dec(parts[10]) : "";
                 return r;
             } catch (Exception ignored) {
                 return null;
