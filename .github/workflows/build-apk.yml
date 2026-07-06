@@ -50,7 +50,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: NK-Score-Manager-build-log
+          name: Golf-Scorecard-Offline-build-log
           path: build-output.log
 
       - name: Stop when build failed
@@ -60,19 +60,19 @@ jobs:
       - name: Prepare release APK
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/debug/app-debug.apk release/NK-Score-Manager-v1.14.0-v26-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release/Golf-Scorecard-Offline-v1.15.0-v27-debug.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NK-Score-Manager-debug-apk
-          path: release/NK-Score-Manager-v1.14.0-v26-debug.apk
+          name: Golf-Scorecard-Offline-debug-apk
+          path: release/Golf-Scorecard-Offline-v1.15.0-v27-debug.apk
 
       - name: Commit APK to release folder
         if: github.event_name != 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add release/NK-Score-Manager-v1.14.0-v26-debug.apk
+          git add release/Golf-Scorecard-Offline-v1.15.0-v27-debug.apk
           git diff --cached --quiet && echo "No APK changes to commit" || git commit -m "Add latest debug APK [skip ci]"
           git push
