@@ -36,3 +36,4 @@ Android向けのゴルフスコア管理アプリです。
 ## Build request
 
 - APK artifact request: 2026-07-06 v1.3.0
+- Retry with captured build log: 2026-07-06
