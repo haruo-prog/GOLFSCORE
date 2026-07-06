@@ -8,22 +8,22 @@ Android向けのゴルフスコア管理アプリです。
 
 ## Version
 
-- App version: 1.11.0
-- V2.3 restore backup feature
-- versionCode: 23
+- App version: 1.12.0
+- V2.4 smooth input screen update
+- versionCode: 24
 - compileSdk: 36
 - targetSdk: 36
 - minSdk: 26
 
-## V2.3変更点
+## V2.4変更点
 
-- 設定画面にバックアップ保存を追加
-- 設定画面にバックアップから復元を追加
-- Google Driveなどの保存先へバックアップファイルを作成可能
-- Google Driveなどからバックアップファイルを選択して復元可能
-- 復元後はホーム画面へ戻り、保存済み履歴・設定・クラブセットを再読込
+- 入力画面のカクつきを改善
+- スコア入力時に画面全体を再生成しない方式へ変更
+- スコア表示、進捗、PAT、Tee結果のみを部分更新
+- スクロール位置の強制復元を減らし、入力中の引っかかりを軽減
+- ホール移動、人数変更、PAR変更など必要な場面のみ画面再生成
+- バックアップ保存 / バックアップから復元は継続
 - 多言語対応は継続
-- 全世界コース選択は削除済み
 
 ## Product Positioning
 
