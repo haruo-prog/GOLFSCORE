@@ -48,6 +48,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -56,16 +57,25 @@ public class MainActivity extends Activity {
     private static final int PLAYERS = 4;
     private static final int SCORE_MAX = 15;
     private static final long AUTO_SAVE_INTERVAL_MS = 1000L;
-    private static final String PREF_NAME = "nk_score_manager_beta";
-    private static final String KEY_PREFIX = "v16_";
-    private static final String KEY_HISTORY = "v16_history";
-    private static final String KEY_PDF_TREE_URI = "v17_pdf_tree_uri";
-    private static final String KEY_LAST_CLUB_PHOTO = "v17_last_club_photo";
 
-    private static final int REQ_PDF_FOLDER = 701;
-    private static final int REQ_BACKUP_CREATE = 702;
-    private static final int REQ_RESTORE_OPEN = 703;
-    private static final int REQ_CLUB_CAMERA = 704;
+    private static final String PREF_NAME = "nk_score_manager_v2";
+    private static final String KEY_PREFIX = "v2_";
+    private static final String KEY_HISTORY = "v2_history";
+    private static final String KEY_COURSES = "v2_courses";
+    private static final String KEY_CLUBS = "v2_clubs";
+    private static final String KEY_PDF_TREE_URI = "v2_pdf_tree_uri";
+    private static final String KEY_LAST_CLUB_PHOTO = "v2_last_club_photo";
+
+    private static final int REQ_PDF_FOLDER = 801;
+    private static final int REQ_BACKUP_CREATE = 802;
+    private static final int REQ_RESTORE_OPEN = 803;
+    private static final int REQ_CLUB_CAMERA = 804;
+
+    private static final int SCREEN_HOME = 0;
+    private static final int SCREEN_ROUND = 1;
+    private static final int SCREEN_HISTORY = 2;
+    private static final int SCREEN_ANALYSIS = 3;
+    private static final int SCREEN_SETTINGS = 4;
 
     private static final int COLOR_BG = 0xFFF8FAFC;
     private static final int COLOR_CARD = 0xFFFFFFFF;
@@ -80,32 +90,31 @@ public class MainActivity extends Activity {
 
     private final int[] defaultPars = {4, 4, 3, 5, 4, 4, 5, 3, 4, 4, 5, 4, 3, 4, 4, 5, 3, 4};
     private final String[] playerCountOptions = {"1名", "2名", "3名", "4名"};
-    private final String[] teeResultLabels = {"未選択", "フェアウェイ", "ラフ", "OB"};
-    private final String[] directionLabels = {"未選択", "左", "中央", "右"};
+    private final String[] teeResultLabels = {"未選択", "FW", "左ラフ", "右ラフ", "左OB", "右OB"};
 
     private LinearLayout root;
     private ScrollView scrollView;
     private TextView saveStatusText;
 
+    private int screen = SCREEN_HOME;
+    private boolean binding = false;
+    private boolean registrationMode = false;
+    private int activePlayers = 1;
+    private int currentHole = 0;
+
     private String dateText = "";
     private String courseText = "";
     private String teeText = "";
     private String startTimeText = "";
-    private int activePlayers = 1;
-    private int currentHole = 0;
-    private boolean registrationMode = false;
-    private String selectedHistoryDetail = "";
-    private String selectedScoreCard = "";
     private String clubPhotoPath = "";
+    private String selectedHistoryText = "";
 
     private final int[] pars = new int[HOLES];
     private final String[] playerNames = {"Player 1", "Player 2", "Player 3", "Player 4"};
     private final int[][] scores = new int[PLAYERS][HOLES];
     private final int[] player1Putts = new int[HOLES];
     private final int[] teeResults = new int[HOLES];
-    private final int[] directions = new int[HOLES];
-
-    private boolean binding = false;
+    private final String[] teeClubs = new String[HOLES];
 
     private final Handler autoSaveHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoSaveRunnable = new Runnable() {
@@ -120,8 +129,7 @@ public class MainActivity extends Activity {
         initDefaults();
         restoreDraft();
         setContentView(createBaseView());
-        if (registrationMode) renderRegistrationScreen(false);
-        else renderHomeScreen();
+        if (registrationMode) renderRound(false); else renderHome();
         startAutoSaveTimer();
     }
 
@@ -149,41 +157,32 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null) return;
-
         if (requestCode == REQ_PDF_FOLDER) {
             Uri uri = data.getData();
             if (uri == null) return;
             int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            try {
-                getContentResolver().takePersistableUriPermission(uri, flags);
-            } catch (Exception ignored) {}
-            getPrefs().edit().putString(KEY_PDF_TREE_URI, uri.toString()).commit();
-            Toast.makeText(this, "PDF保存先を記憶しました。", Toast.LENGTH_LONG).show();
-            renderHomeScreen();
+            try { getContentResolver().takePersistableUriPermission(uri, flags); } catch (Exception ignored) {}
+            prefs().edit().putString(KEY_PDF_TREE_URI, uri.toString()).commit();
+            toast("PDF保存先を記憶しました。");
+            renderSettings();
             return;
         }
-
         if (requestCode == REQ_BACKUP_CREATE) {
             Uri uri = data.getData();
             if (uri != null) writeBackupToUri(uri);
             return;
         }
-
         if (requestCode == REQ_RESTORE_OPEN) {
             Uri uri = data.getData();
             if (uri != null) restoreBackupFromUri(uri);
             return;
         }
-
         if (requestCode == REQ_CLUB_CAMERA) {
             Bitmap bitmap = null;
             Bundle extras = data.getExtras();
-            if (extras != null) {
-                Object raw = extras.get("data");
-                if (raw instanceof Bitmap) bitmap = (Bitmap) raw;
-            }
+            if (extras != null && extras.get("data") instanceof Bitmap) bitmap = (Bitmap) extras.get("data");
             if (bitmap == null) {
-                Toast.makeText(this, "写真を取得できませんでした。", Toast.LENGTH_LONG).show();
+                toast("写真を取得できませんでした。");
                 return;
             }
             saveClubPhotoWebp(bitmap);
@@ -202,622 +201,700 @@ public class MainActivity extends Activity {
     }
 
     private void initDefaults() {
-        System.arraycopy(defaultPars, 0, pars, 0, HOLES);
         dateText = nowDate();
+        System.arraycopy(defaultPars, 0, pars, 0, HOLES);
         for (int p = 0; p < PLAYERS; p++) playerNames[p] = "Player " + (p + 1);
+        String firstClub = getClubList()[0];
+        for (int h = 0; h < HOLES; h++) teeClubs[h] = firstClub;
     }
 
-    private void renderHomeScreen() {
+    private void renderHome() {
+        screen = SCREEN_HOME;
         registrationMode = false;
         saveDraft(false);
         root.removeAllViews();
-        root.addView(createHeroCard());
-        root.addView(createHomeActionCard());
-        root.addView(createStorageCard());
-        root.addView(createStatsCard());
-        root.addView(createHistoryCard());
-        saveStatusText = text("保存状態: ホーム表示中", 13, COLOR_MUTED, false);
-        saveStatusText.setGravity(Gravity.CENTER_HORIZONTAL);
-        saveStatusText.setPadding(0, dp(10), 0, dp(8));
-        root.addView(saveStatusText);
+        root.addView(hero("NK Score Manager", "商品化UI V2 / 1画面入力・分析・設定整理"));
+        root.addView(homeActions());
+        root.addView(recentStatsCard());
+        addBottomNav();
         scrollTop();
     }
 
-    private View createHeroCard() {
+    private View homeActions() {
         LinearLayout card = card();
-        card.setGravity(Gravity.CENTER_HORIZONTAL);
-        ImageView logo = new ImageView(this);
-        logo.setImageResource(getResources().getIdentifier("ic_launcher", "drawable", getPackageName()));
-        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(72), dp(72));
-        logoParams.gravity = Gravity.CENTER_HORIZONTAL;
-        logoParams.setMargins(0, 0, 0, dp(8));
-        card.addView(logo, logoParams);
-        TextView title = text("NK Score Manager", 27, COLOR_TEXT, true);
+        card.addView(section("ラウンド"));
+        Button start = button("ラウンド開始", true);
+        start.setOnClickListener(v -> {
+            resetRound(true);
+            renderRound(false);
+        });
+        card.addView(start, fullWidth());
+        if (hasAnyDraft()) {
+            Button resume = button("入力中のラウンドに戻る", false);
+            resume.setOnClickListener(v -> renderRound(false));
+            card.addView(resume, fullWidth());
+        }
+        Button history = button("履歴を見る", false);
+        history.setOnClickListener(v -> renderHistory());
+        card.addView(history, fullWidth());
+        Button analysis = button("分析を見る", false);
+        analysis.setOnClickListener(v -> renderAnalysis());
+        card.addView(analysis, fullWidth());
+        Button settings = button("設定・バックアップ", false);
+        settings.setOnClickListener(v -> renderSettings());
+        card.addView(settings, fullWidth());
+        return card;
+    }
+
+    private View recentStatsCard() {
+        LinearLayout card = card();
+        card.addView(section("最近の成績"));
+        card.addView(panel(buildStatsText(loadHistoryRecords()), true));
+        return card;
+    }
+
+    private void renderRound(boolean keepScroll) {
+        final int y = keepScroll && scrollView != null ? scrollView.getScrollY() : 0;
+        screen = SCREEN_ROUND;
+        registrationMode = true;
+        root.removeAllViews();
+        root.addView(roundHeader());
+        root.addView(roundSetupCard());
+        root.addView(progressCard());
+        root.addView(oneScreenInputCard());
+        root.addView(roundActionCard());
+        saveStatusText = text("自動保存中", 12, COLOR_MUTED, false);
+        saveStatusText.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.addView(saveStatusText);
+        if (keepScroll) restoreScroll(y); else scrollTop();
+    }
+
+    private View roundHeader() {
+        LinearLayout card = card();
+        TextView title = text((currentHole + 1) + "H  PAR" + pars[currentHole], 30, COLOR_TEXT, true);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         card.addView(title);
-        TextView sub = text("PDF保存先記憶・Driveバックアップ・クラブ写真 V1.7", 14, COLOR_MUTED, false);
+        TextView sub = text(courseTextOrDefault() + " / " + teeText + " / " + startTimeText, 13, COLOR_MUTED, false);
         sub.setGravity(Gravity.CENTER_HORIZONTAL);
         sub.setPadding(0, dp(4), 0, 0);
         card.addView(sub);
         return card;
     }
 
-    private View createHomeActionCard() {
+    private View roundSetupCard() {
         LinearLayout card = card();
-        card.addView(sectionCompact("フロントページ"));
-        TextView help = text("ラウンド中は1Hずつ、大きな候補ボタンだけで入力します。入力中は完了まで登録画面を維持します。", 13, COLOR_MUTED, false);
-        help.setPadding(0, 0, 0, dp(8));
-        card.addView(help);
+        card.addView(section("ラウンド開始前設定"));
+        EditText course = input("コース名");
+        course.setText(courseText);
+        watch(course, v -> courseText = v);
+        EditText tee = input("ティー 例: ブルー");
+        tee.setText(teeText);
+        watch(tee, v -> teeText = v);
+        EditText start = input("スタート時間 / OUT / IN");
+        start.setText(startTimeText);
+        watch(start, v -> startTimeText = v);
+        card.addView(course);
+        card.addView(tee);
+        card.addView(start);
 
-        if (hasAnyDraft()) {
-            Button resume = button("入力中のラウンドに戻る", true);
-            resume.setOnClickListener(v -> {
-                registrationMode = true;
-                renderRegistrationScreen(false);
-                saveDraft(false);
-            });
-            card.addView(resume, fullWidthButtonParams());
-        }
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        Button saveCourse = button("コース保存", false);
+        saveCourse.setOnClickListener(v -> saveCourseTemplate());
+        Button loadCourse = button("保存コース読込", false);
+        loadCourse.setOnClickListener(v -> loadLatestCourseTemplate());
+        row.addView(saveCourse, weighted(1));
+        row.addView(loadCourse, weighted(1));
+        card.addView(row);
 
-        Button start = button("新規スコア登録", true);
-        start.setOnClickListener(v -> {
-            resetRound(true);
-            renderRegistrationScreen(false);
-            saveDraft(false);
-        });
-        card.addView(start, fullWidthButtonParams());
-        return card;
-    }
-
-    private View createStorageCard() {
-        LinearLayout card = card();
-        card.addView(sectionCompact("保存・バックアップ"));
-        String pdfUri = getPrefs().getString(KEY_PDF_TREE_URI, "");
-        String current = TextUtils.isEmpty(pdfUri) ? "未設定：アプリ内部Documentsに保存" : "設定済み：選択した保存先を記憶中";
-        card.addView(panel("PDF保存先：" + current + "\nGoogle Driveフォルダを選択すると、PDFをDrive側へ保存できます。", false));
-
-        Button pdfFolder = button("PDF保存先を指定・変更", true);
-        pdfFolder.setOnClickListener(v -> choosePdfFolder());
-        card.addView(pdfFolder, fullWidthButtonParams());
-
-        Button backup = button("Google Driveへバックアップ", false);
-        backup.setOnClickListener(v -> createBackupDocument());
-        card.addView(backup, fullWidthButtonParams());
-
-        Button restore = button("Google Driveからリストア", false);
-        restore.setOnClickListener(v -> openBackupDocument());
-        card.addView(restore, fullWidthButtonParams());
-        return card;
-    }
-
-    private View createStatsCard() {
-        LinearLayout card = card();
-        card.addView(sectionCompact("平均・傾向"));
-        card.addView(panel(buildStatsText(loadHistoryRecords()), true));
-        return card;
-    }
-
-    private View createHistoryCard() {
-        LinearLayout card = card();
-        card.addView(sectionCompact("過去のプレイ一覧"));
-        ArrayList<RoundRecord> records = loadHistoryRecords();
-        if (records.isEmpty()) {
-            TextView empty = text("保存済みプレイはまだありません。", 14, COLOR_MUTED, false);
-            empty.setPadding(0, dp(6), 0, dp(6));
-            card.addView(empty);
-        } else {
-            for (int i = 0; i < records.size() && i < 30; i++) {
-                RoundRecord record = records.get(i);
-                LinearLayout row = cardLite();
-                String photo = TextUtils.isEmpty(record.clubPhotoPath) ? "クラブ写真なし" : "クラブ写真あり";
-                row.addView(text(record.date + "  " + record.course + "\nPlayer1 TOTAL: " + record.total + " / PAT: " + record.putts + " / FW: " + record.fwKeep + "/" + record.fwTarget + " / " + photo, 13, COLOR_TEXT, true));
-                LinearLayout actions = new LinearLayout(this);
-                actions.setOrientation(LinearLayout.HORIZONTAL);
-                Button detail = button("詳細", false);
-                detail.setOnClickListener(v -> {
-                    selectedHistoryDetail = record.detail;
-                    selectedScoreCard = record.scoreCard;
-                    clubPhotoPath = record.clubPhotoPath;
-                    renderHomeScreen();
-                });
-                Button pdf = button("PDF", true);
-                pdf.setOnClickListener(v -> exportPdf(record.scoreCard, record.detail));
-                actions.addView(detail, weightedParams(1f, dp(3), dp(3)));
-                actions.addView(pdf, weightedParams(1f, dp(3), dp(3)));
-                row.addView(actions);
-                card.addView(row);
-            }
-        }
-
-        if (!TextUtils.isEmpty(selectedScoreCard) || !TextUtils.isEmpty(selectedHistoryDetail)) {
-            card.addView(sectionCompact("選択中のスコアカード"));
-            String photoLine = TextUtils.isEmpty(clubPhotoPath) ? "" : "\n\n当日クラブ写真WebP: " + clubPhotoPath;
-            card.addView(panel((TextUtils.isEmpty(selectedScoreCard) ? selectedHistoryDetail : selectedScoreCard) + photoLine, false));
-            Button pdf = button("選択中の履歴をPDF出力", true);
-            pdf.setOnClickListener(v -> exportPdf(selectedScoreCard, selectedHistoryDetail));
-            card.addView(pdf, fullWidthButtonParams());
-        }
-        return card;
-    }
-
-    private void renderRegistrationScreen(boolean keepScrollPosition) {
-        final int scrollY = keepScrollPosition && scrollView != null ? scrollView.getScrollY() : 0;
-        registrationMode = true;
-        root.removeAllViews();
-        root.addView(createRegistrationHeaderCard());
-        root.addView(createProgressCard());
-        root.addView(createRoundInfoCard());
-        root.addView(createPlayerSetupCard());
-        root.addView(createHoleCard());
-        root.addView(createSummaryCard());
-        root.addView(createRegistrationButtons());
-        saveStatusText = text("保存状態: 登録中", 13, COLOR_MUTED, false);
-        saveStatusText.setGravity(Gravity.CENTER_HORIZONTAL);
-        saveStatusText.setPadding(0, dp(10), 0, dp(8));
-        root.addView(saveStatusText);
-        if (keepScrollPosition) restoreScroll(scrollY);
-        else scrollTop();
-    }
-
-    private View createRegistrationHeaderCard() {
-        LinearLayout card = card();
-        TextView title = text("スコア登録モード", 22, COLOR_TEXT, true);
-        title.setGravity(Gravity.CENTER_HORIZONTAL);
-        card.addView(title);
-        TextView sub = text("候補ボタンを押しても、入力位置は上に戻りません。", 13, COLOR_MUTED, false);
-        sub.setGravity(Gravity.CENTER_HORIZONTAL);
-        sub.setPadding(0, dp(6), 0, 0);
-        card.addView(sub);
-        return card;
-    }
-
-    private View createProgressCard() {
-        LinearLayout card = card();
-        card.addView(sectionCompact("入力進捗"));
-        card.addView(panel("現在 " + (currentHole + 1) + "H / 18H\nPlayer1: " + countEnteredForPlayer(0) + "/18  /  全体未入力: " + countMissingScores(), true));
-        card.addView(holeJumpGrid());
-        return card;
-    }
-
-    private View holeJumpGrid() {
-        LinearLayout grid = new LinearLayout(this);
-        grid.setOrientation(LinearLayout.VERTICAL);
-        for (int row = 0; row < 3; row++) {
-            LinearLayout line = new LinearLayout(this);
-            line.setOrientation(LinearLayout.HORIZONTAL);
-            for (int col = 0; col < 6; col++) {
-                int hole = row * 6 + col;
-                Button b = new Button(this);
-                b.setText(String.valueOf(hole + 1));
-                b.setTextSize(12);
-                b.setAllCaps(false);
-                b.setTextColor(hole == currentHole ? 0xFFFFFFFF : COLOR_TEXT);
-                int bg = hole == currentHole ? COLOR_PRIMARY : (isHoleComplete(hole) ? COLOR_PRIMARY_SOFT : COLOR_DANGER_SOFT);
-                b.setBackground(rounded(bg, hole == currentHole ? COLOR_PRIMARY_DARK : COLOR_BORDER, 12));
-                b.setMinHeight(dp(42));
-                final int target = hole;
-                b.setOnClickListener(v -> {
-                    currentHole = target;
-                    saveDraft(false);
-                    renderRegistrationScreen(false);
-                });
-                line.addView(b, weightedParams(1f, dp(2), dp(2)));
-            }
-            grid.addView(line);
-        }
-        return grid;
-    }
-
-    private View createRoundInfoCard() {
-        LinearLayout card = card();
-        card.addView(sectionCompact("ラウンド情報"));
-        EditText dateEdit = normalInput("日付");
-        dateEdit.setText(dateText);
-        attachTextWatcher(dateEdit, value -> dateText = value);
-        EditText courseEdit = normalInput("ゴルフ場名");
-        courseEdit.setText(courseText);
-        attachTextWatcher(courseEdit, value -> courseText = value);
-        EditText teeEdit = normalInput("ティー");
-        teeEdit.setText(teeText);
-        attachTextWatcher(teeEdit, value -> teeText = value);
-        EditText startEdit = normalInput("スタート時間 / OUT / IN");
-        startEdit.setText(startTimeText);
-        attachTextWatcher(startEdit, value -> startTimeText = value);
-        card.addView(dateEdit);
-        card.addView(courseEdit);
-        card.addView(teeEdit);
-        card.addView(startEdit);
-        return card;
-    }
-
-    private View createPlayerSetupCard() {
-        LinearLayout card = card();
-        card.addView(sectionCompact("人数・プレイヤー名"));
         LinearLayout countRow = new LinearLayout(this);
         countRow.setOrientation(LinearLayout.HORIZONTAL);
         countRow.setGravity(Gravity.CENTER_VERTICAL);
-        countRow.addView(text("入力人数", 15, COLOR_TEXT, true), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        Spinner playerCountSpinner = spinner(playerCountOptions);
+        countRow.addView(text("人数", 14, COLOR_TEXT, true), weighted(1));
+        Spinner sp = spinner(playerCountOptions);
         binding = true;
-        playerCountSpinner.setSelection(activePlayers - 1);
+        sp.setSelection(activePlayers - 1);
         binding = false;
-        playerCountSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+        sp.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (binding) return;
-                int next = position + 1;
-                if (next != activePlayers) {
-                    activePlayers = next;
+                int n = position + 1;
+                if (n != activePlayers) {
+                    activePlayers = n;
                     saveDraft(false);
-                    renderRegistrationScreen(true);
+                    renderRound(true);
                 }
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
-        countRow.addView(playerCountSpinner, new LinearLayout.LayoutParams(dp(120), LinearLayout.LayoutParams.WRAP_CONTENT));
+        countRow.addView(sp, new LinearLayout.LayoutParams(dp(120), LinearLayout.LayoutParams.WRAP_CONTENT));
         card.addView(countRow);
-
         for (int p = 0; p < activePlayers; p++) {
-            final int player = p;
-            EditText name = normalInput(p == 0 ? "Player1（詳細分析対象）" : "Player" + (p + 1));
+            final int idx = p;
+            EditText name = input(p == 0 ? "Player1 名前" : "同伴者" + (p + 1));
             name.setText(playerNames[p]);
-            attachTextWatcher(name, value -> playerNames[player] = value);
+            watch(name, v -> playerNames[idx] = v);
             card.addView(name);
         }
         return card;
     }
 
-    private View createHoleCard() {
+    private View progressCard() {
         LinearLayout card = card();
-        TextView title = text((currentHole + 1) + "H", 30, COLOR_TEXT, true);
-        title.setGravity(Gravity.CENTER_HORIZONTAL);
-        card.addView(title);
-        TextView sub = text((currentHole < 9 ? "OUT" : "IN") + " / PAR " + pars[currentHole], 14, COLOR_MUTED, true);
-        sub.setGravity(Gravity.CENTER_HORIZONTAL);
-        sub.setPadding(0, dp(4), 0, dp(8));
-        card.addView(sub);
-
-        card.addView(createParControl());
-        card.addView(createPlayer1Input());
-        for (int p = 1; p < activePlayers; p++) card.addView(createOtherPlayerInput(p));
-        card.addView(createHoleNavButtons());
+        card.addView(section("進捗"));
+        card.addView(panel("Player1 " + entered(0) + "/18 / 全体未入力 " + missingScores(), true));
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        for (int r = 0; r < 3; r++) {
+            LinearLayout line = new LinearLayout(this);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            for (int c = 0; c < 6; c++) {
+                int h = r * 6 + c;
+                Button b = new Button(this);
+                b.setText(String.valueOf(h + 1));
+                b.setAllCaps(false);
+                b.setTextSize(12);
+                b.setTextColor(h == currentHole ? 0xFFFFFFFF : COLOR_TEXT);
+                int fill = h == currentHole ? COLOR_PRIMARY : (holeComplete(h) ? COLOR_PRIMARY_SOFT : COLOR_DANGER_SOFT);
+                b.setBackground(rounded(fill, COLOR_BORDER, 12));
+                final int target = h;
+                b.setOnClickListener(v -> {
+                    currentHole = target;
+                    saveDraft(false);
+                    renderRound(false);
+                });
+                line.addView(b, weighted(1));
+            }
+            grid.addView(line);
+        }
+        card.addView(grid);
         return card;
     }
 
-    private View createParControl() {
-        LinearLayout wrap = cardLite();
-        wrap.addView(text("PAR設定", 13, COLOR_MUTED, true));
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        for (int par = 3; par <= 6; par++) {
-            final int value = par;
-            Button b = choiceButton(String.valueOf(par), pars[currentHole] == par);
-            b.setOnClickListener(v -> {
-                pars[currentHole] = value;
-                saveDraft(false);
-                renderRegistrationScreen(true);
-            });
-            row.addView(b, weightedParams(1f, dp(3), dp(3)));
-        }
-        wrap.addView(row);
-        return wrap;
-    }
-
-    private View createPlayer1Input() {
-        LinearLayout wrap = cardLite();
-        wrap.addView(text(displayPlayerName(0) + "（詳細入力）", 18, COLOR_TEXT, true));
-        wrap.addView(scoreCandidateGrid(0));
-        wrap.addView(puttGrid());
-        wrap.addView(teeCombinedGrid());
-        return wrap;
-    }
-
-    private View createOtherPlayerInput(int player) {
-        LinearLayout wrap = cardLite();
-        wrap.addView(text(displayPlayerName(player), 18, COLOR_TEXT, true));
-        TextView note = text("同伴者はスコアだけ入力します。", 12, COLOR_MUTED, false);
-        note.setPadding(0, dp(2), 0, dp(4));
-        wrap.addView(note);
-        wrap.addView(scoreCandidateGrid(player));
-        return wrap;
-    }
-
-    private View scoreCandidateGrid(int player) {
-        LinearLayout group = new LinearLayout(this);
-        group.setOrientation(LinearLayout.VERTICAL);
-        group.setPadding(0, dp(8), 0, dp(8));
-        TextView label = text("SCORE 1〜15", 12, COLOR_MUTED, true);
-        label.setGravity(Gravity.CENTER_HORIZONTAL);
-        group.addView(label);
-        for (int row = 0; row < 3; row++) {
-            LinearLayout line = new LinearLayout(this);
-            line.setOrientation(LinearLayout.HORIZONTAL);
-            for (int col = 0; col < 5; col++) {
-                int value = row * 5 + col + 1;
-                Button b = choiceButton(String.valueOf(value), scores[player][currentHole] == value);
-                b.setMinHeight(dp(54));
-                final int score = value;
-                b.setOnClickListener(v -> {
-                    scores[player][currentHole] = score;
-                    saveDraft(false);
-                    renderRegistrationScreen(true);
-                });
-                line.addView(b, weightedParams(1f, dp(2), dp(2)));
-            }
-            group.addView(line);
-        }
-        Button clear = button("スコア未入力に戻す", false);
-        clear.setOnClickListener(v -> {
-            scores[player][currentHole] = 0;
-            saveDraft(false);
-            renderRegistrationScreen(true);
-        });
-        group.addView(clear, fullWidthButtonParams());
-        return group;
-    }
-
-    private View puttGrid() {
-        LinearLayout group = new LinearLayout(this);
-        group.setOrientation(LinearLayout.VERTICAL);
-        group.setPadding(0, dp(8), 0, dp(8));
-        TextView label = text("PAT", 12, COLOR_MUTED, true);
-        label.setGravity(Gravity.CENTER_HORIZONTAL);
-        group.addView(label);
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        for (int value = 1; value <= 6; value++) {
-            final int putt = value;
-            Button b = choiceButton(String.valueOf(value), player1Putts[currentHole] == value);
-            b.setOnClickListener(v -> {
-                player1Putts[currentHole] = putt;
-                saveDraft(false);
-                renderRegistrationScreen(true);
-            });
-            row.addView(b, weightedParams(1f, dp(2), dp(2)));
-        }
-        group.addView(row);
-        Button clear = button("PAT未入力に戻す", false);
-        clear.setOnClickListener(v -> {
-            player1Putts[currentHole] = 0;
-            saveDraft(false);
-            renderRegistrationScreen(true);
-        });
-        group.addView(clear, fullWidthButtonParams());
-        return group;
-    }
-
-    private View teeCombinedGrid() {
-        LinearLayout group = new LinearLayout(this);
-        group.setOrientation(LinearLayout.VERTICAL);
-        group.setPadding(0, dp(8), 0, dp(8));
-        TextView label = text("ティーショット（結果＋方向性を1タップ）", 12, COLOR_MUTED, true);
-        label.setGravity(Gravity.CENTER_HORIZONTAL);
-        group.addView(label);
-        addTeeRow(group, new TeeChoice[]{new TeeChoice("FW左", 1, 1), new TeeChoice("FW中", 1, 2), new TeeChoice("FW右", 1, 3)});
-        addTeeRow(group, new TeeChoice[]{new TeeChoice("ラフ左", 2, 1), new TeeChoice("ラフ中", 2, 2), new TeeChoice("ラフ右", 2, 3)});
-        addTeeRow(group, new TeeChoice[]{new TeeChoice("OB左", 3, 1), new TeeChoice("OB中", 3, 2), new TeeChoice("OB右", 3, 3)});
-        Button clear = button("ティーショット未選択に戻す", false);
-        clear.setOnClickListener(v -> {
-            teeResults[currentHole] = 0;
-            directions[currentHole] = 0;
-            saveDraft(false);
-            renderRegistrationScreen(true);
-        });
-        group.addView(clear, fullWidthButtonParams());
-        return group;
-    }
-
-    private void addTeeRow(LinearLayout group, TeeChoice[] choices) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        for (TeeChoice choice : choices) {
-            boolean selected = teeResults[currentHole] == choice.result && directions[currentHole] == choice.direction;
-            Button b = choiceButton(choice.label, selected);
-            b.setOnClickListener(v -> {
-                teeResults[currentHole] = choice.result;
-                directions[currentHole] = choice.direction;
-                saveDraft(false);
-                renderRegistrationScreen(true);
-            });
-            row.addView(b, weightedParams(1f, dp(3), dp(3)));
-        }
-        group.addView(row);
-    }
-
-    private View createHoleNavButtons() {
+    private View oneScreenInputCard() {
+        LinearLayout card = card();
+        card.addView(section("入力"));
+        card.addView(parPicker());
+        card.addView(player1Input());
+        if (activePlayers > 1) card.addView(otherPlayersInput());
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
         Button prev = button("前のH", false);
         prev.setEnabled(currentHole > 0);
         prev.setOnClickListener(v -> moveHole(-1));
-        Button next = button(currentHole == HOLES - 1 ? "最終H" : "次のH", true);
+        Button next = button("次のH", true);
         next.setEnabled(currentHole < HOLES - 1);
         next.setOnClickListener(v -> moveHole(1));
-        nav.addView(prev, weightedParams(1f, dp(3), dp(3)));
-        nav.addView(next, weightedParams(1f, dp(3), dp(3)));
-        return nav;
-    }
-
-    private View createSummaryCard() {
-        LinearLayout card = card();
-        card.addView(sectionCompact("現在の集計"));
-        card.addView(panel(buildLiveSummary(), true));
-        card.addView(sectionCompact("スコアカード プレビュー"));
-        card.addView(panel(buildScoreCardText(false), false));
+        nav.addView(prev, weighted(1));
+        nav.addView(next, weighted(1));
+        card.addView(nav);
         return card;
     }
 
-    private View createRegistrationButtons() {
-        LinearLayout area = new LinearLayout(this);
-        area.setOrientation(LinearLayout.VERTICAL);
-        Button save = button("ここまで保存", false);
-        save.setOnClickListener(v -> saveDraft(true));
-        area.addView(save, fullWidthButtonParams());
-
-        Button photo = button("当日使ったクラブを撮影して記録", false);
-        photo.setOnClickListener(v -> captureClubPhoto());
-        area.addView(photo, fullWidthButtonParams());
-
-        if (!TextUtils.isEmpty(clubPhotoPath)) {
-            area.addView(panel("クラブ写真WebP保存済み\n" + clubPhotoPath, false));
+    private View parPicker() {
+        LinearLayout wrap = lite();
+        wrap.addView(text("PAR", 12, COLOR_MUTED, true));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int par = 3; par <= 6; par++) {
+            final int value = par;
+            Button b = choice(String.valueOf(par), pars[currentHole] == par);
+            b.setOnClickListener(v -> {
+                pars[currentHole] = value;
+                saveDraft(false);
+                renderRound(true);
+            });
+            row.addView(b, weighted(1));
         }
+        wrap.addView(row);
+        return wrap;
+    }
 
-        Button pdfPreview = button("現在のスコアカードをPDF出力", false);
-        pdfPreview.setOnClickListener(v -> exportPdf(buildScoreCardText(true), buildExportText()));
-        area.addView(pdfPreview, fullWidthButtonParams());
+    private View player1Input() {
+        LinearLayout wrap = lite();
+        wrap.addView(text(displayName(0), 18, COLOR_TEXT, true));
+        wrap.addView(scoreButtons(0));
+        wrap.addView(puttButtons());
+        wrap.addView(clubAndResultButtons());
+        return wrap;
+    }
 
-        Button finish = button("全入力完了 → 履歴に保存", true);
+    private View otherPlayersInput() {
+        LinearLayout wrap = lite();
+        wrap.addView(text("同伴者スコア", 16, COLOR_TEXT, true));
+        for (int p = 1; p < activePlayers; p++) {
+            LinearLayout block = new LinearLayout(this);
+            block.setOrientation(LinearLayout.VERTICAL);
+            block.setPadding(0, dp(6), 0, dp(6));
+            block.addView(text(displayName(p), 15, COLOR_TEXT, true));
+            block.addView(scoreButtons(p));
+            wrap.addView(block);
+        }
+        return wrap;
+    }
+
+    private View scoreButtons(int player) {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        TextView label = text("SCORE / PAR基準", 12, COLOR_MUTED, true);
+        label.setGravity(Gravity.CENTER_HORIZONTAL);
+        group.addView(label);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        int par = pars[currentHole];
+        int[] values = uniqueScoreValues(new int[]{Math.max(1, par - 1), par, par + 1, par + 2, par + 3, Math.min(SCORE_MAX, par + 4)});
+        for (int value : values) {
+            final int score = value;
+            Button b = choice(String.valueOf(value), scores[player][currentHole] == value);
+            b.setMinHeight(dp(54));
+            b.setOnClickListener(v -> {
+                scores[player][currentHole] = score;
+                saveDraft(false);
+                renderRound(true);
+            });
+            row.addView(b, weighted(1));
+        }
+        group.addView(row);
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        Button clear = button("未入力", false);
+        clear.setOnClickListener(v -> {
+            scores[player][currentHole] = 0;
+            saveDraft(false);
+            renderRound(true);
+        });
+        Button big = button("大叩き 9-15", false);
+        big.setOnClickListener(v -> {
+            int current = scores[player][currentHole];
+            scores[player][currentHole] = current < 9 ? 9 : (current >= 15 ? 9 : current + 1);
+            saveDraft(false);
+            renderRound(true);
+        });
+        row2.addView(clear, weighted(1));
+        row2.addView(big, weighted(1));
+        group.addView(row2);
+        return group;
+    }
+
+    private View puttButtons() {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        TextView label = text("PAT", 12, COLOR_MUTED, true);
+        label.setGravity(Gravity.CENTER_HORIZONTAL);
+        group.addView(label);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int v = 1; v <= 4; v++) {
+            final int putt = v;
+            String labelText = v == 4 ? "4+" : String.valueOf(v);
+            Button b = choice(labelText, player1Putts[currentHole] == v);
+            b.setOnClickListener(x -> {
+                player1Putts[currentHole] = putt;
+                saveDraft(false);
+                renderRound(true);
+            });
+            row.addView(b, weighted(1));
+        }
+        group.addView(row);
+        return group;
+    }
+
+    private View clubAndResultButtons() {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        TextView label = text("Tee / 使用クラブと結果", 12, COLOR_MUTED, true);
+        label.setGravity(Gravity.CENTER_HORIZONTAL);
+        group.addView(label);
+        Spinner clubSpinner = spinner(getClubList());
+        String[] clubs = getClubList();
+        int selected = 0;
+        for (int i = 0; i < clubs.length; i++) if (clubs[i].equals(teeClubs[currentHole])) selected = i;
+        binding = true;
+        clubSpinner.setSelection(selected);
+        binding = false;
+        clubSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (binding) return;
+                teeClubs[currentHole] = getClubList()[position];
+                saveDraft(false);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        group.addView(clubSpinner);
+        LinearLayout row1 = new LinearLayout(this);
+        row1.setOrientation(LinearLayout.HORIZONTAL);
+        addTeeButton(row1, "FW", 1);
+        addTeeButton(row1, "左ラフ", 2);
+        addTeeButton(row1, "右ラフ", 3);
+        group.addView(row1);
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        addTeeButton(row2, "左OB", 4);
+        addTeeButton(row2, "右OB", 5);
+        Button clear = button("未選択", false);
+        clear.setOnClickListener(v -> {
+            teeResults[currentHole] = 0;
+            saveDraft(false);
+            renderRound(true);
+        });
+        row2.addView(clear, weighted(1));
+        group.addView(row2);
+        return group;
+    }
+
+    private void addTeeButton(LinearLayout row, String label, int value) {
+        Button b = choice(label, teeResults[currentHole] == value);
+        b.setOnClickListener(v -> {
+            teeResults[currentHole] = value;
+            saveDraft(false);
+            renderRound(true);
+        });
+        row.addView(b, weighted(1));
+    }
+
+    private View roundActionCard() {
+        LinearLayout card = card();
+        card.addView(section("ラウンド後"));
+        Button photo = button("当日クラブを撮影してWebP保存", false);
+        photo.setOnClickListener(v -> captureClubPhoto());
+        card.addView(photo, fullWidth());
+        if (!TextUtils.isEmpty(clubPhotoPath)) card.addView(panel("クラブ写真: " + clubPhotoPath, false));
+        Button finish = button("保存して分析を見る", true);
         finish.setOnClickListener(v -> finishRound());
-        area.addView(finish, fullWidthButtonParams());
+        card.addView(finish, fullWidth());
+        return card;
+    }
 
-        TextView hint = text("未入力スコアがある場合は、登録画面を閉じずに入力を続けます。", 12, COLOR_MUTED, false);
-        hint.setGravity(Gravity.CENTER_HORIZONTAL);
-        hint.setPadding(0, dp(4), 0, dp(8));
-        area.addView(hint);
-        return area;
+    private void renderHistory() {
+        screen = SCREEN_HISTORY;
+        registrationMode = false;
+        saveDraft(false);
+        root.removeAllViews();
+        root.addView(hero("履歴", "過去ラウンドとスコアカード"));
+        LinearLayout card = card();
+        ArrayList<RoundRecord> records = loadHistoryRecords();
+        if (records.isEmpty()) {
+            card.addView(panel("履歴はまだありません。", false));
+        } else {
+            for (RoundRecord r : records) {
+                LinearLayout row = lite();
+                row.addView(text(r.date + " " + r.course + " / " + r.total + " / PAT " + r.putts, 14, COLOR_TEXT, true));
+                LinearLayout buttons = new LinearLayout(this);
+                buttons.setOrientation(LinearLayout.HORIZONTAL);
+                Button detail = button("詳細", false);
+                detail.setOnClickListener(v -> {
+                    selectedHistoryText = r.scoreCard + "\n\n" + r.analysis;
+                    renderHistory();
+                });
+                Button pdf = button("PDF", true);
+                pdf.setOnClickListener(v -> exportPdf(r.scoreCard, r.analysis));
+                buttons.addView(detail, weighted(1));
+                buttons.addView(pdf, weighted(1));
+                row.addView(buttons);
+                card.addView(row);
+            }
+        }
+        if (!TextUtils.isEmpty(selectedHistoryText)) card.addView(panel(selectedHistoryText, false));
+        root.addView(card);
+        addBottomNav();
+        scrollTop();
+    }
+
+    private void renderAnalysis() {
+        screen = SCREEN_ANALYSIS;
+        registrationMode = false;
+        saveDraft(false);
+        root.removeAllViews();
+        root.addView(hero("分析", "コース別・ホール別・クラブ別"));
+        LinearLayout card = card();
+        ArrayList<RoundRecord> records = loadHistoryRecords();
+        card.addView(panel(buildStatsText(records) + "\n\n" + buildCourseAnalysis(records) + "\n" + buildClubAnalysis(records) + "\n" + buildHoleAnalysis(records), true));
+        root.addView(card);
+        addBottomNav();
+        scrollTop();
+    }
+
+    private void renderSettings() {
+        screen = SCREEN_SETTINGS;
+        registrationMode = false;
+        saveDraft(false);
+        root.removeAllViews();
+        root.addView(hero("設定", "PDF保存先・クラブセット・バックアップ"));
+        LinearLayout card = card();
+        card.addView(section("PDF保存先"));
+        String tree = prefs().getString(KEY_PDF_TREE_URI, "");
+        card.addView(panel(TextUtils.isEmpty(tree) ? "未設定：内部Documentsへ保存" : "設定済み：選択フォルダを記憶中", false));
+        Button pdf = button("PDF保存先を指定・変更", true);
+        pdf.setOnClickListener(v -> choosePdfFolder());
+        card.addView(pdf, fullWidth());
+        card.addView(section("クラブセット"));
+        EditText clubs = input("クラブをカンマ区切りで入力");
+        clubs.setText(TextUtils.join(",", getClubList()));
+        card.addView(clubs);
+        Button saveClubs = button("クラブセット保存", true);
+        saveClubs.setOnClickListener(v -> {
+            prefs().edit().putString(KEY_CLUBS, clubs.getText().toString()).commit();
+            toast("クラブセットを保存しました。");
+        });
+        card.addView(saveClubs, fullWidth());
+        card.addView(section("バックアップ"));
+        Button backup = button("Google Driveへバックアップ", false);
+        backup.setOnClickListener(v -> createBackupDocument());
+        Button restore = button("Google Driveからリストア", false);
+        restore.setOnClickListener(v -> openBackupDocument());
+        card.addView(backup, fullWidth());
+        card.addView(restore, fullWidth());
+        card.addView(section("コーステンプレート"));
+        card.addView(panel(courseTemplatesSummary(), false));
+        root.addView(card);
+        addBottomNav();
+        scrollTop();
+    }
+
+    private void addBottomNav() {
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        Button home = button("ホーム", screen == SCREEN_HOME);
+        home.setOnClickListener(v -> renderHome());
+        Button hist = button("履歴", screen == SCREEN_HISTORY);
+        hist.setOnClickListener(v -> renderHistory());
+        Button ana = button("分析", screen == SCREEN_ANALYSIS);
+        ana.setOnClickListener(v -> renderAnalysis());
+        Button set = button("設定", screen == SCREEN_SETTINGS);
+        set.setOnClickListener(v -> renderSettings());
+        nav.addView(home, weighted(1));
+        nav.addView(hist, weighted(1));
+        nav.addView(ana, weighted(1));
+        nav.addView(set, weighted(1));
+        root.addView(nav);
+    }
+
+    private void finishRound() {
+        int missing = missingScores();
+        if (missing > 0) {
+            toast("未入力スコアがあります: " + missing + "件");
+            renderRound(true);
+            return;
+        }
+        RoundRecord record = buildRecord();
+        ArrayList<RoundRecord> records = loadHistoryRecords();
+        records.add(0, record);
+        saveHistoryRecords(records);
+        selectedHistoryText = record.scoreCard + "\n\n" + record.analysis;
+        resetRound(false);
+        toast("保存しました。分析を表示します。");
+        renderHistory();
+    }
+
+    private RoundRecord buildRecord() {
+        RoundRecord r = new RoundRecord();
+        r.timestamp = parseDate(dateText);
+        r.date = dateText;
+        r.course = courseTextOrDefault();
+        r.tee = teeText;
+        r.pars = serializeIntArray(pars);
+        r.p1Scores = serializeIntArray(scores[0]);
+        r.putts = sum(player1Putts);
+        r.puttArray = serializeIntArray(player1Putts);
+        r.teeResults = serializeIntArray(teeResults);
+        r.teeClubs = serializeStringArray(teeClubs);
+        r.total = totalScore(0);
+        r.bestDiff = totalScore(0) - sum(pars);
+        r.fw = countTee(1);
+        r.teeShots = countTeeTargets();
+        r.clubPhoto = clubPhotoPath;
+        r.scoreCard = buildScoreCard(r);
+        r.analysis = buildRoundAdvice();
+        return r;
+    }
+
+    private String buildScoreCard(RoundRecord r) {
+        StringBuilder b = new StringBuilder();
+        b.append("NK SCORE CARD\n");
+        b.append(r.date).append("  ").append(r.course).append("  ").append(r.tee).append("\n");
+        b.append("HOLE  1  2  3  4  5  6  7  8  9 |OUT|10 11 12 13 14 15 16 17 18 |IN |TOTAL\n");
+        b.append("PAR  ").append(rowValues(pars, false)).append("\n");
+        for (int p = 0; p < activePlayers; p++) b.append(shortName(displayName(p))).append("   ").append(rowValues(scores[p], true)).append("\n");
+        b.append("\nPlayer1 PAT: ").append(sum(player1Putts));
+        b.append(" / FW: ").append(countTee(1)).append("/").append(countTeeTargets()).append("\n");
+        if (!TextUtils.isEmpty(clubPhotoPath)) b.append("Club Photo: ").append(clubPhotoPath).append("\n");
+        return b.toString();
+    }
+
+    private String buildRoundAdvice() {
+        int total = totalScore(0);
+        int puttTotal = sum(player1Putts);
+        int left = countTee(2) + countTee(4);
+        int right = countTee(3) + countTee(5);
+        int ob = countTee(4) + countTee(5);
+        int par3Diff = diffByPar(3);
+        int par4Diff = diffByPar(4);
+        int par5Diff = diffByPar(5);
+        StringBuilder b = new StringBuilder();
+        b.append("今日の自動分析\n");
+        b.append("スコア: ").append(total).append(" / PAT: ").append(puttTotal).append(" / OB系: ").append(ob).append("\n");
+        if (puttTotal >= 36) b.append("・PAT数が多めです。3PAT以上のホールを減らすと即スコア改善につながります。\n");
+        if (right > left) b.append("・右方向のミスが多い傾向です。ティーショットの向きとフェース管理を確認。\n");
+        else if (left > right) b.append("・左方向のミスが多い傾向です。引っかけ/巻き込みを確認。\n");
+        if (ob >= 2) b.append("・OBが複数回あります。狭いホールは番手を落とす戦略が有効です。\n");
+        if (par5Diff > par4Diff && par5Diff > par3Diff) b.append("・PAR5で落としています。2打目以降のクラブ選択を見直す価値があります。\n");
+        b.append("PAR3差分: ").append(par3Diff).append(" / PAR4差分: ").append(par4Diff).append(" / PAR5差分: ").append(par5Diff).append("\n");
+        b.append("\nクラブ別傾向\n").append(currentRoundClubAdvice());
+        return b.toString();
+    }
+
+    private String currentRoundClubAdvice() {
+        LinkedHashMap<String, int[]> map = new LinkedHashMap<>();
+        for (int h = 0; h < HOLES; h++) {
+            String club = TextUtils.isEmpty(teeClubs[h]) ? "未選択" : teeClubs[h];
+            int[] a = map.get(club);
+            if (a == null) a = new int[4];
+            a[0]++;
+            if (teeResults[h] == 1) a[1]++;
+            if (teeResults[h] == 4 || teeResults[h] == 5) a[2]++;
+            if (teeResults[h] == 2 || teeResults[h] == 4) a[3]++;
+            map.put(club, a);
+        }
+        StringBuilder b = new StringBuilder();
+        for (Map.Entry<String, int[]> e : map.entrySet()) {
+            int[] a = e.getValue();
+            if (a[0] == 0) continue;
+            b.append(e.getKey()).append("：使用").append(a[0]).append(" / FW").append(a[1]).append(" / OB").append(a[2]).append("\n");
+        }
+        return b.toString();
+    }
+
+    private String buildCourseAnalysis(ArrayList<RoundRecord> records) {
+        if (records.isEmpty()) return "コース別: データなし\n";
+        LinkedHashMap<String, int[]> map = new LinkedHashMap<>();
+        for (RoundRecord r : records) {
+            int[] a = map.get(r.course);
+            if (a == null) a = new int[]{0, 0, 999};
+            a[0]++;
+            a[1] += r.total;
+            if (r.total < a[2]) a[2] = r.total;
+            map.put(r.course, a);
+        }
+        StringBuilder b = new StringBuilder("コース別\n");
+        for (Map.Entry<String, int[]> e : map.entrySet()) {
+            int[] a = e.getValue();
+            b.append(e.getKey()).append("：平均").append(format1(a[1] * 1.0 / a[0])).append(" / ベスト").append(a[2]).append(" / ").append(a[0]).append("回\n");
+        }
+        return b.toString();
+    }
+
+    private String buildClubAnalysis(ArrayList<RoundRecord> records) {
+        LinkedHashMap<String, int[]> map = new LinkedHashMap<>();
+        for (RoundRecord r : records) {
+            String[] clubs = deserializeStringArray(r.teeClubs, HOLES, "-");
+            int[] results = deserializeIntArray(r.teeResults, HOLES, 0);
+            for (int h = 0; h < HOLES; h++) {
+                String club = clubs[h];
+                if (TextUtils.isEmpty(club) || "-".equals(club)) continue;
+                int[] a = map.get(club);
+                if (a == null) a = new int[4];
+                a[0]++;
+                if (results[h] == 1) a[1]++;
+                if (results[h] == 4 || results[h] == 5) a[2]++;
+                if (results[h] == 3 || results[h] == 5) a[3]++;
+                map.put(club, a);
+            }
+        }
+        if (map.isEmpty()) return "クラブ別: データなし\n";
+        StringBuilder b = new StringBuilder("クラブ別\n");
+        for (Map.Entry<String, int[]> e : map.entrySet()) {
+            int[] a = e.getValue();
+            b.append(e.getKey()).append("：使用").append(a[0]).append(" / FW率").append(percent(a[1], a[0])).append(" / OB").append(a[2]).append(" / 右ミス").append(a[3]).append("\n");
+        }
+        return b.toString();
+    }
+
+    private String buildHoleAnalysis(ArrayList<RoundRecord> records) {
+        if (records.isEmpty()) return "ホール別: データなし\n";
+        int[] totalDiff = new int[HOLES];
+        int[] count = new int[HOLES];
+        for (RoundRecord r : records) {
+            int[] s = deserializeIntArray(r.p1Scores, HOLES, 0);
+            int[] p = deserializeIntArray(r.pars, HOLES, 4);
+            for (int h = 0; h < HOLES; h++) if (s[h] > 0) {
+                totalDiff[h] += s[h] - p[h];
+                count[h]++;
+            }
+        }
+        int worst = -1;
+        double worstAvg = -99;
+        for (int h = 0; h < HOLES; h++) if (count[h] > 0) {
+            double avg = totalDiff[h] * 1.0 / count[h];
+            if (avg > worstAvg) { worstAvg = avg; worst = h; }
+        }
+        if (worst < 0) return "ホール別: データなし\n";
+        return "苦手ホール\n" + (worst + 1) + "H 平均 " + (worstAvg >= 0 ? "+" : "") + format1(worstAvg) + "\n";
+    }
+
+    private String buildStatsText(ArrayList<RoundRecord> records) {
+        long now = System.currentTimeMillis();
+        return averageText(records, now - 90L * 24L * 60L * 60L * 1000L, "過去3カ月") + "\n" + averageText(records, now - 365L * 24L * 60L * 60L * 1000L, "過去1年");
+    }
+
+    private String averageText(ArrayList<RoundRecord> records, long since, String label) {
+        int c = 0, total = 0, putt = 0, fw = 0, tee = 0;
+        for (RoundRecord r : records) if (r.timestamp >= since) {
+            c++;
+            total += r.total;
+            putt += r.putts;
+            fw += r.fw;
+            tee += r.teeShots;
+        }
+        if (c == 0) return label + ": データなし";
+        return label + ": " + c + "回 / 平均" + format1(total * 1.0 / c) + " / PAT" + format1(putt * 1.0 / c) + " / FW" + percent(fw, tee);
     }
 
     private void moveHole(int delta) {
         currentHole = bound(currentHole + delta, 0, HOLES - 1);
         saveDraft(false);
-        renderRegistrationScreen(false);
+        renderRound(false);
     }
 
-    private void finishRound() {
-        int missing = countMissingScores();
-        if (missing > 0) {
-            Toast.makeText(this, "未入力スコアがあります: " + missing + "件", Toast.LENGTH_SHORT).show();
-            registrationMode = true;
-            renderRegistrationScreen(true);
+    private void saveCourseTemplate() {
+        if (TextUtils.isEmpty(courseText.trim())) {
+            toast("コース名を入力してください。");
             return;
         }
-        String scoreCard = buildScoreCardText(true);
-        String export = buildExportText();
-        RoundRecord record = buildRoundRecord(export, scoreCard);
-        ArrayList<RoundRecord> records = loadHistoryRecords();
-        records.add(0, record);
-        saveHistoryRecords(records);
-        Toast.makeText(this, "履歴に保存しました。", Toast.LENGTH_SHORT).show();
-        selectedHistoryDetail = export;
-        selectedScoreCard = scoreCard;
-        resetRound(false);
-        registrationMode = false;
-        saveDraft(false);
-        renderHomeScreen();
+        String line = encode(courseText.trim()) + "|" + encode(teeText.trim()) + "|" + serializeIntArray(pars);
+        String old = prefs().getString(KEY_COURSES, "");
+        prefs().edit().putString(KEY_COURSES, line + (TextUtils.isEmpty(old) ? "" : "\n" + old)).commit();
+        toast("コーステンプレートを保存しました。");
     }
 
-    private String buildLiveSummary() {
-        StringBuilder builder = new StringBuilder();
-        for (int p = 0; p < activePlayers; p++) {
-            int total = 0;
-            int parTotal = 0;
-            int entered = 0;
-            for (int h = 0; h < HOLES; h++) {
-                if (scores[p][h] > 0) {
-                    entered++;
-                    total += scores[p][h];
-                    parTotal += pars[h];
-                }
-            }
-            int diff = total - parTotal;
-            String diffText = entered == 0 ? "-" : (diff == 0 ? "EVEN" : (diff > 0 ? "+" + diff : String.valueOf(diff)));
-            builder.append(displayPlayerName(p)).append("：")
-                    .append(entered).append("H / TOTAL ")
-                    .append(entered == 0 ? "-" : total)
-                    .append(" / ").append(diffText);
-            if (p == 0) builder.append(" / PAT ").append(sum(player1Putts));
-            builder.append("\n");
+    private void loadLatestCourseTemplate() {
+        String raw = prefs().getString(KEY_COURSES, "");
+        if (TextUtils.isEmpty(raw)) {
+            toast("保存済みコースがありません。");
+            return;
         }
-        builder.append("Player1 Tee: FW ").append(countTeeResult(1))
-                .append(" / ラフ ").append(countTeeResult(2))
-                .append(" / OB ").append(countTeeResult(3));
-        return builder.toString().trim();
+        String[] lines = raw.split("\n", -1);
+        String[] parts = lines[0].split("\\|", -1);
+        if (parts.length >= 3) {
+            courseText = decode(parts[0]);
+            teeText = decode(parts[1]);
+            int[] restored = deserializeIntArray(parts[2], HOLES, 4);
+            System.arraycopy(restored, 0, pars, 0, HOLES);
+            saveDraft(false);
+            toast("最新の保存コースを読み込みました。");
+            renderRound(false);
+        }
     }
 
-    private String buildScoreCardText(boolean full) {
+    private String courseTemplatesSummary() {
+        String raw = prefs().getString(KEY_COURSES, "");
+        if (TextUtils.isEmpty(raw)) return "保存済みコースはありません。";
         StringBuilder b = new StringBuilder();
-        b.append("SCORE CARD\n");
-        b.append(dateText).append("  ").append(TextUtils.isEmpty(courseText) ? "未入力" : courseText).append("\n");
-        b.append("TEE: ").append(teeText).append("  START: ").append(startTimeText).append("\n");
-        if (!TextUtils.isEmpty(clubPhotoPath)) b.append("CLUB PHOTO WEBP: ").append(clubPhotoPath).append("\n");
-        b.append("\n");
-        b.append("HOLE  1  2  3  4  5  6  7  8  9 |OUT|10 11 12 13 14 15 16 17 18 |IN |TOTAL\n");
-        b.append("PAR  ").append(rowValues(pars, -1)).append("\n");
-        for (int p = 0; p < activePlayers; p++) b.append(shortName(displayPlayerName(p))).append("   ").append(rowValues(scores[p], p)).append("\n");
-        b.append("\n").append(buildLiveSummary()).append("\n");
-        if (full) {
-            b.append("\nPlayer1 Tee Detail\n");
-            for (int h = 0; h < HOLES; h++) {
-                b.append(h + 1).append("H: ")
-                        .append(teeResultLabels[bound(teeResults[h], 0, teeResultLabels.length - 1)])
-                        .append(" / ")
-                        .append(directionLabels[bound(directions[h], 0, directionLabels.length - 1)])
-                        .append(" / PAT ").append(formatValue(player1Putts[h]))
-                        .append("\n");
-            }
+        String[] lines = raw.split("\n", -1);
+        for (int i = 0; i < lines.length && i < 10; i++) {
+            String[] parts = lines[i].split("\\|", -1);
+            if (parts.length >= 2) b.append(i + 1).append(". ").append(decode(parts[0])).append(" ").append(decode(parts[1])).append("\n");
         }
-        return b.toString();
-    }
-
-    private String rowValues(int[] values, int player) {
-        StringBuilder b = new StringBuilder();
-        int out = 0;
-        int in = 0;
-        int total = 0;
-        for (int h = 0; h < HOLES; h++) {
-            int value = values[h];
-            if (player >= 0 && value == 0) b.append(" - ");
-            else b.append(pad2(value));
-            if (h < 9) out += value;
-            else in += value;
-            total += value;
-            if (h == 8) b.append("|").append(pad2(out)).append("|");
-        }
-        b.append("|").append(pad2(in)).append("|").append(pad3(total));
-        return b.toString();
-    }
-
-    private String buildExportText() {
-        StringBuilder builder = new StringBuilder();
-        builder.append("NK Score Export V1.7\n");
-        builder.append("日付: ").append(dateText).append("\n");
-        builder.append("コース: ").append(courseText).append("\n");
-        builder.append("ティー: ").append(teeText).append("\n");
-        builder.append("スタート: ").append(startTimeText).append("\n");
-        builder.append("人数: ").append(activePlayers).append("名\n");
-        if (!TextUtils.isEmpty(clubPhotoPath)) builder.append("クラブ写真WebP: ").append(clubPhotoPath).append("\n");
-        builder.append("====================\n");
-        for (int h = 0; h < HOLES; h++) {
-            builder.append(h + 1).append("H / PAR:").append(pars[h]).append("\n");
-            for (int p = 0; p < activePlayers; p++) {
-                builder.append("  ").append(displayPlayerName(p)).append(" / SCORE:").append(formatValue(scores[p][h]));
-                if (p == 0) {
-                    builder.append(" / PAT:").append(formatValue(player1Putts[h]))
-                            .append(" / Tee:").append(teeResultLabels[teeResults[h]])
-                            .append(" / Direction:").append(directionLabels[directions[h]]);
-                }
-                builder.append("\n");
-            }
-            if (h == 8) builder.append("---------- IN / OUT ----------\n");
-        }
-        builder.append("====================\n");
-        builder.append(buildLiveSummary()).append("\n");
-        return builder.toString();
-    }
-
-    private RoundRecord buildRoundRecord(String export, String scoreCard) {
-        RoundRecord record = new RoundRecord();
-        record.timestamp = parseDateMillis(dateText);
-        record.date = dateText;
-        record.course = TextUtils.isEmpty(courseText) ? "未入力" : courseText;
-        record.total = totalScore(0);
-        record.parTotal = totalParForEntered(0);
-        record.putts = sum(player1Putts);
-        record.fwKeep = countTeeResult(1);
-        record.fwTarget = countTeeTargets();
-        record.detail = export;
-        record.scoreCard = scoreCard;
-        record.clubPhotoPath = clubPhotoPath;
-        return record;
+        return b.toString().trim();
     }
 
     private void choosePdfFolder() {
@@ -830,7 +907,7 @@ public class MainActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("text/plain");
-        intent.putExtra(Intent.EXTRA_TITLE, "NKScore_Backup_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".txt");
+        intent.putExtra(Intent.EXTRA_TITLE, "NKScore_Backup_" + nowFile() + ".txt");
         startActivityForResult(intent, REQ_BACKUP_CREATE);
     }
 
@@ -842,11 +919,10 @@ public class MainActivity extends Activity {
     }
 
     private void captureClubPhoto() {
-        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
         try {
-            startActivityForResult(intent, REQ_CLUB_CAMERA);
+            startActivityForResult(new Intent(MediaStore.ACTION_IMAGE_CAPTURE), REQ_CLUB_CAMERA);
         } catch (Exception e) {
-            Toast.makeText(this, "カメラを起動できませんでした。", Toast.LENGTH_LONG).show();
+            toast("カメラを起動できませんでした。");
         }
     }
 
@@ -854,92 +930,80 @@ public class MainActivity extends Activity {
         try {
             File dir = new File(getFilesDir(), "club_photos");
             if (!dir.exists()) dir.mkdirs();
-            File file = new File(dir, "club_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".webp");
+            File file = new File(dir, "club_" + nowFile() + ".webp");
             FileOutputStream out = new FileOutputStream(file);
-            if (Build.VERSION.SDK_INT >= 30) {
-                bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 70, out);
-            } else {
-                bitmap.compress(Bitmap.CompressFormat.WEBP, 70, out);
-            }
+            if (Build.VERSION.SDK_INT >= 30) bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 70, out);
+            else bitmap.compress(Bitmap.CompressFormat.WEBP, 70, out);
             out.close();
             clubPhotoPath = file.getAbsolutePath();
-            getPrefs().edit().putString(KEY_LAST_CLUB_PHOTO, clubPhotoPath).commit();
+            prefs().edit().putString(KEY_LAST_CLUB_PHOTO, clubPhotoPath).commit();
             saveDraft(false);
-            Toast.makeText(this, "クラブ写真をWebPで軽量保存しました。", Toast.LENGTH_LONG).show();
-            renderRegistrationScreen(true);
+            toast("クラブ写真をWebPで保存しました。");
+            renderRound(true);
         } catch (Exception e) {
-            Toast.makeText(this, "クラブ写真の保存に失敗しました。", Toast.LENGTH_LONG).show();
+            toast("クラブ写真の保存に失敗しました。");
         }
     }
 
-    private void exportPdf(String scoreCard, String detail) {
-        String content = (TextUtils.isEmpty(scoreCard) ? "SCORE CARD\n" : scoreCard) + "\n\nDETAIL\n" + (TextUtils.isEmpty(detail) ? "" : detail);
-        String fileName = "NKScore_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".pdf";
-        String tree = getPrefs().getString(KEY_PDF_TREE_URI, "");
+    private void exportPdf(String scoreCard, String analysis) {
+        String content = scoreCard + "\n\n" + analysis;
+        String fileName = "NKScore_" + nowFile() + ".pdf";
+        String tree = prefs().getString(KEY_PDF_TREE_URI, "");
         if (!TextUtils.isEmpty(tree)) {
             try {
                 Uri treeUri = Uri.parse(tree);
                 Uri parent = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri));
                 Uri fileUri = DocumentsContract.createDocument(getContentResolver(), parent, "application/pdf", fileName);
-                if (fileUri == null) throw new Exception("createDocument returned null");
+                if (fileUri == null) throw new Exception("null");
                 OutputStream out = getContentResolver().openOutputStream(fileUri);
-                if (out == null) throw new Exception("openOutputStream returned null");
-                writePdfToStream(content, out);
+                if (out == null) throw new Exception("null");
+                writePdf(content, out);
                 out.close();
-                copyText("NK Score PDF URI", fileUri.toString());
-                Toast.makeText(this, "指定保存先へPDF保存しました。保存先URIをコピーしました。", Toast.LENGTH_LONG).show();
+                copyText("PDF URI", fileUri.toString());
+                toast("PDFを指定保存先へ保存しました。");
                 return;
             } catch (Exception e) {
-                Toast.makeText(this, "指定保存先へのPDF保存に失敗。内部保存に切替えます。", Toast.LENGTH_LONG).show();
+                toast("指定保存先に保存できません。内部保存します。");
             }
         }
-
         try {
             File dir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
             if (dir == null) dir = getFilesDir();
             if (!dir.exists()) dir.mkdirs();
             File file = new File(dir, fileName);
             FileOutputStream out = new FileOutputStream(file);
-            writePdfToStream(content, out);
+            writePdf(content, out);
             out.close();
-            copyText("NK Score PDF Path", file.getAbsolutePath());
-            Toast.makeText(this, "PDFを内部保存しました。パスをコピーしました。", Toast.LENGTH_LONG).show();
+            copyText("PDF Path", file.getAbsolutePath());
+            toast("PDFを内部保存しました。パスをコピーしました。");
         } catch (Exception e) {
-            Toast.makeText(this, "PDF保存に失敗しました。", Toast.LENGTH_LONG).show();
+            toast("PDF保存に失敗しました。");
         }
     }
 
-    private void writePdfToStream(String content, OutputStream out) throws Exception {
+    private void writePdf(String content, OutputStream out) throws Exception {
         PdfDocument pdf = new PdfDocument();
-        Paint paint = new Paint();
-        paint.setTextSize(10f);
-        paint.setAntiAlias(true);
-        Paint titlePaint = new Paint();
-        titlePaint.setTextSize(18f);
-        titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-        titlePaint.setAntiAlias(true);
-
-        int pageWidth = 842;
-        int pageHeight = 595;
-        int margin = 28;
-        int y = margin;
-        int pageNumber = 1;
-        PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create());
-        Canvas canvas = page.getCanvas();
-        canvas.drawText("NK Score Manager Score Card", margin, y, titlePaint);
+        Paint p = new Paint();
+        p.setAntiAlias(true);
+        p.setTextSize(10f);
+        Paint title = new Paint();
+        title.setAntiAlias(true);
+        title.setTextSize(18f);
+        title.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        int w = 842, h = 595, margin = 28, y = margin, pageNo = 1;
+        PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(w, h, pageNo).create());
+        Canvas c = page.getCanvas();
+        c.drawText("NK Score Manager", margin, y, title);
         y += 24;
-        String[] lines = content.split("\n", -1);
-        for (String line : lines) {
-            ArrayList<String> wrapped = wrapLine(line, 115);
-            for (String part : wrapped) {
-                if (y > pageHeight - margin) {
+        for (String line : content.split("\n", -1)) {
+            for (String part : wrap(line, 115)) {
+                if (y > h - margin) {
                     pdf.finishPage(page);
-                    pageNumber++;
-                    page = pdf.startPage(new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create());
-                    canvas = page.getCanvas();
+                    page = pdf.startPage(new PdfDocument.PageInfo.Builder(w, h, ++pageNo).create());
+                    c = page.getCanvas();
                     y = margin;
                 }
-                canvas.drawText(part, margin, y, paint);
+                c.drawText(part, margin, y, p);
                 y += 14;
             }
         }
@@ -950,194 +1014,104 @@ public class MainActivity extends Activity {
 
     private void writeBackupToUri(Uri uri) {
         try {
-            String backup = buildBackupText();
             OutputStream out = getContentResolver().openOutputStream(uri);
-            if (out == null) throw new Exception("openOutputStream failed");
-            out.write(backup.getBytes(StandardCharsets.UTF_8));
+            if (out == null) throw new Exception("open failed");
+            out.write(buildBackup().getBytes(StandardCharsets.UTF_8));
             out.close();
-            Toast.makeText(this, "バックアップを保存しました。", Toast.LENGTH_LONG).show();
+            toast("バックアップを保存しました。");
         } catch (Exception e) {
-            Toast.makeText(this, "バックアップ保存に失敗しました。", Toast.LENGTH_LONG).show();
+            toast("バックアップ保存に失敗しました。");
         }
     }
 
     private void restoreBackupFromUri(Uri uri) {
         try {
             InputStream in = getContentResolver().openInputStream(uri);
-            if (in == null) throw new Exception("openInputStream failed");
+            if (in == null) throw new Exception("open failed");
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             byte[] data = new byte[8192];
             int n;
             while ((n = in.read(data)) > 0) buffer.write(data, 0, n);
             in.close();
-            applyBackupText(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
+            applyBackup(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
             initDefaults();
             restoreDraft();
-            Toast.makeText(this, "バックアップからリストアしました。", Toast.LENGTH_LONG).show();
-            renderHomeScreen();
+            toast("リストアしました。");
+            renderHome();
         } catch (Exception e) {
-            Toast.makeText(this, "リストアに失敗しました。", Toast.LENGTH_LONG).show();
+            toast("リストアに失敗しました。");
         }
     }
 
-    private String buildBackupText() {
-        StringBuilder b = new StringBuilder();
-        b.append("NKSM_BACKUP_V1\n");
-        Map<String, ?> all = getPrefs().getAll();
-        for (Map.Entry<String, ?> entry : all.entrySet()) {
-            Object value = entry.getValue();
-            String key = encode(entry.getKey());
-            if (value instanceof String) b.append("S|").append(key).append("|").append(encode((String) value)).append("\n");
-            else if (value instanceof Integer) b.append("I|").append(key).append("|").append(value).append("\n");
-            else if (value instanceof Boolean) b.append("B|").append(key).append("|").append(value).append("\n");
-            else if (value instanceof Long) b.append("L|").append(key).append("|").append(value).append("\n");
-        }
-        File photoDir = new File(getFilesDir(), "club_photos");
-        File[] files = photoDir.listFiles();
-        if (files != null) {
-            for (File file : files) {
-                if (file.isFile() && file.getName().endsWith(".webp")) {
-                    b.append("P|").append(encode(file.getName())).append("|").append(encodeFile(file)).append("\n");
-                }
-            }
+    private String buildBackup() {
+        StringBuilder b = new StringBuilder("NKSM_BACKUP_V2\n");
+        Map<String, ?> all = prefs().getAll();
+        for (Map.Entry<String, ?> e : all.entrySet()) {
+            Object v = e.getValue();
+            String key = encode(e.getKey());
+            if (v instanceof String) b.append("S|").append(key).append("|").append(encode((String) v)).append("\n");
+            else if (v instanceof Integer) b.append("I|").append(key).append("|").append(v).append("\n");
+            else if (v instanceof Boolean) b.append("B|").append(key).append("|").append(v).append("\n");
+            else if (v instanceof Long) b.append("L|").append(key).append("|").append(v).append("\n");
         }
         return b.toString();
     }
 
-    private void applyBackupText(String backup) throws Exception {
-        if (TextUtils.isEmpty(backup) || !backup.startsWith("NKSM_BACKUP_V1")) throw new Exception("invalid backup");
-        SharedPreferences.Editor editor = getPrefs().edit();
+    private void applyBackup(String raw) throws Exception {
+        if (TextUtils.isEmpty(raw) || !raw.startsWith("NKSM_BACKUP_V2")) throw new Exception("invalid");
+        SharedPreferences.Editor editor = prefs().edit();
         editor.clear();
-        String[] lines = backup.split("\n", -1);
-        for (String line : lines) {
-            if (TextUtils.isEmpty(line) || line.equals("NKSM_BACKUP_V1")) continue;
+        for (String line : raw.split("\n", -1)) {
+            if (TextUtils.isEmpty(line) || line.equals("NKSM_BACKUP_V2")) continue;
             String[] parts = line.split("\\|", -1);
             if (parts.length < 3) continue;
-            if ("P".equals(parts[0])) {
-                restorePhotoFile(decode(parts[1]), parts[2]);
-                continue;
-            }
             String key = decode(parts[1]);
             if ("S".equals(parts[0])) editor.putString(key, decode(parts[2]));
             else if ("I".equals(parts[0])) editor.putInt(key, parseInt(parts[2], 0));
             else if ("B".equals(parts[0])) editor.putBoolean(key, Boolean.parseBoolean(parts[2]));
-            else if ("L".equals(parts[0])) editor.putLong(key, parseLong(parts[2], 0L));
+            else if ("L".equals(parts[0])) editor.putLong(key, parseLong(parts[2], 0));
         }
         editor.commit();
     }
 
-    private String encodeFile(File file) {
-        try {
-            FileInputStream in = new FileInputStream(file);
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int n;
-            while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
-            in.close();
-            return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private void restorePhotoFile(String name, String base64) {
-        try {
-            if (TextUtils.isEmpty(name) || TextUtils.isEmpty(base64)) return;
-            File dir = new File(getFilesDir(), "club_photos");
-            if (!dir.exists()) dir.mkdirs();
-            File file = new File(dir, name);
-            FileOutputStream out = new FileOutputStream(file);
-            out.write(Base64.decode(base64, Base64.NO_WRAP));
-            out.close();
-        } catch (Exception ignored) {}
-    }
-
-    private ArrayList<String> wrapLine(String line, int maxChars) {
-        ArrayList<String> parts = new ArrayList<>();
-        if (line == null) line = "";
-        if (line.length() == 0) {
-            parts.add("");
-            return parts;
-        }
-        int start = 0;
-        while (start < line.length()) {
-            int end = Math.min(line.length(), start + maxChars);
-            parts.add(line.substring(start, end));
-            start = end;
-        }
-        return parts;
-    }
-
-    private String buildStatsText(ArrayList<RoundRecord> records) {
-        long now = System.currentTimeMillis();
-        return averageText(records, now - 90L * 24L * 60L * 60L * 1000L, "過去3カ月") + "\n" +
-                averageText(records, now - 365L * 24L * 60L * 60L * 1000L, "過去1年");
-    }
-
-    private String averageText(ArrayList<RoundRecord> records, long since, String label) {
-        int count = 0;
-        int total = 0;
-        int putts = 0;
-        int fwKeep = 0;
-        int fwTarget = 0;
-        for (RoundRecord r : records) {
-            if (r.timestamp >= since) {
-                count++;
-                total += r.total;
-                putts += r.putts;
-                fwKeep += r.fwKeep;
-                fwTarget += r.fwTarget;
-            }
-        }
-        if (count == 0) return label + ": データなし";
-        String avgScore = String.format(Locale.US, "%.1f", total * 1.0 / count);
-        String avgPutt = String.format(Locale.US, "%.1f", putts * 1.0 / count);
-        String fw = fwTarget == 0 ? "-" : String.format(Locale.US, "%.1f%%", fwKeep * 100.0 / fwTarget);
-        return label + ": " + count + "回 / 平均 " + avgScore + " / PAT平均 " + avgPutt + " / FW " + fw;
-    }
-
     private void saveDraft(boolean showToast) {
-        SharedPreferences.Editor editor = getPrefs().edit();
-        editor.putBoolean(KEY_PREFIX + "registrationMode", registrationMode);
-        editor.putString(KEY_PREFIX + "date", dateText);
-        editor.putString(KEY_PREFIX + "course", courseText);
-        editor.putString(KEY_PREFIX + "tee", teeText);
-        editor.putString(KEY_PREFIX + "start", startTimeText);
-        editor.putInt(KEY_PREFIX + "activePlayers", activePlayers);
-        editor.putInt(KEY_PREFIX + "currentHole", currentHole);
-        editor.putString(KEY_PREFIX + "pars", serializeIntArray(pars));
-        editor.putString(KEY_PREFIX + "names", serializeStringArray(playerNames));
-        editor.putString(KEY_PREFIX + "putts", serializeIntArray(player1Putts));
-        editor.putString(KEY_PREFIX + "teeResults", serializeIntArray(teeResults));
-        editor.putString(KEY_PREFIX + "directions", serializeIntArray(directions));
-        editor.putString(KEY_PREFIX + "selectedDetail", encode(selectedHistoryDetail));
-        editor.putString(KEY_PREFIX + "selectedScoreCard", encode(selectedScoreCard));
-        editor.putString(KEY_LAST_CLUB_PHOTO, clubPhotoPath);
-        for (int p = 0; p < PLAYERS; p++) editor.putString(KEY_PREFIX + "scores_" + p, serializeIntArray(scores[p]));
-        editor.putString(KEY_PREFIX + "lastSaved", nowFull());
-        boolean ok = editor.commit();
-        if (saveStatusText != null) saveStatusText.setText(ok ? "保存状態: 保存済み " + nowFull() : "保存状態: 保存失敗");
-        if (showToast) Toast.makeText(this, ok ? "保存しました。" : "保存に失敗しました。", Toast.LENGTH_SHORT).show();
+        SharedPreferences.Editor e = prefs().edit();
+        e.putBoolean(KEY_PREFIX + "registration", registrationMode);
+        e.putString(KEY_PREFIX + "date", dateText);
+        e.putString(KEY_PREFIX + "course", courseText);
+        e.putString(KEY_PREFIX + "tee", teeText);
+        e.putString(KEY_PREFIX + "start", startTimeText);
+        e.putString(KEY_LAST_CLUB_PHOTO, clubPhotoPath);
+        e.putInt(KEY_PREFIX + "players", activePlayers);
+        e.putInt(KEY_PREFIX + "hole", currentHole);
+        e.putString(KEY_PREFIX + "pars", serializeIntArray(pars));
+        e.putString(KEY_PREFIX + "names", serializeStringArray(playerNames));
+        e.putString(KEY_PREFIX + "putts", serializeIntArray(player1Putts));
+        e.putString(KEY_PREFIX + "teeResults", serializeIntArray(teeResults));
+        e.putString(KEY_PREFIX + "teeClubs", serializeStringArray(teeClubs));
+        for (int p = 0; p < PLAYERS; p++) e.putString(KEY_PREFIX + "scores" + p, serializeIntArray(scores[p]));
+        boolean ok = e.commit();
+        if (saveStatusText != null) saveStatusText.setText(ok ? "保存済み " + nowFull() : "保存失敗");
+        if (showToast) toast(ok ? "保存しました。" : "保存に失敗しました。");
     }
 
     private void restoreDraft() {
-        SharedPreferences prefs = getPrefs();
-        registrationMode = prefs.getBoolean(KEY_PREFIX + "registrationMode", false);
-        dateText = prefs.getString(KEY_PREFIX + "date", nowDate());
-        courseText = prefs.getString(KEY_PREFIX + "course", "");
-        teeText = prefs.getString(KEY_PREFIX + "tee", "");
-        startTimeText = prefs.getString(KEY_PREFIX + "start", "");
-        activePlayers = bound(prefs.getInt(KEY_PREFIX + "activePlayers", 1), 1, PLAYERS);
-        currentHole = bound(prefs.getInt(KEY_PREFIX + "currentHole", 0), 0, HOLES - 1);
-        selectedHistoryDetail = decode(prefs.getString(KEY_PREFIX + "selectedDetail", ""));
-        selectedScoreCard = decode(prefs.getString(KEY_PREFIX + "selectedScoreCard", ""));
-        clubPhotoPath = prefs.getString(KEY_LAST_CLUB_PHOTO, "");
-        restoreIntArray(prefs.getString(KEY_PREFIX + "pars", ""), pars, defaultPars, 3, 6);
-        restoreStringArray(prefs.getString(KEY_PREFIX + "names", ""), playerNames);
-        restoreIntArray(prefs.getString(KEY_PREFIX + "putts", ""), player1Putts, null, 0, 8);
-        restoreIntArray(prefs.getString(KEY_PREFIX + "teeResults", ""), teeResults, null, 0, teeResultLabels.length - 1);
-        restoreIntArray(prefs.getString(KEY_PREFIX + "directions", ""), directions, null, 0, directionLabels.length - 1);
-        for (int p = 0; p < PLAYERS; p++) restoreIntArray(prefs.getString(KEY_PREFIX + "scores_" + p, ""), scores[p], null, 0, SCORE_MAX);
+        SharedPreferences p = prefs();
+        registrationMode = p.getBoolean(KEY_PREFIX + "registration", false);
+        dateText = p.getString(KEY_PREFIX + "date", nowDate());
+        courseText = p.getString(KEY_PREFIX + "course", "");
+        teeText = p.getString(KEY_PREFIX + "tee", "");
+        startTimeText = p.getString(KEY_PREFIX + "start", "");
+        clubPhotoPath = p.getString(KEY_LAST_CLUB_PHOTO, "");
+        activePlayers = bound(p.getInt(KEY_PREFIX + "players", 1), 1, PLAYERS);
+        currentHole = bound(p.getInt(KEY_PREFIX + "hole", 0), 0, HOLES - 1);
+        restoreIntArray(p.getString(KEY_PREFIX + "pars", ""), pars, defaultPars, 3, 6);
+        restoreStringArray(p.getString(KEY_PREFIX + "names", ""), playerNames);
+        restoreIntArray(p.getString(KEY_PREFIX + "putts", ""), player1Putts, null, 0, 8);
+        restoreIntArray(p.getString(KEY_PREFIX + "teeResults", ""), teeResults, null, 0, 5);
+        restoreStringArray(p.getString(KEY_PREFIX + "teeClubs", ""), teeClubs);
+        for (int i = 0; i < HOLES; i++) if (TextUtils.isEmpty(teeClubs[i])) teeClubs[i] = getClubList()[0];
+        for (int i = 0; i < PLAYERS; i++) restoreIntArray(p.getString(KEY_PREFIX + "scores" + i, ""), scores[i], null, 0, SCORE_MAX);
     }
 
     private void resetRound(boolean keepMode) {
@@ -1145,9 +1119,9 @@ public class MainActivity extends Activity {
         courseText = "";
         teeText = "";
         startTimeText = "";
+        clubPhotoPath = "";
         activePlayers = 1;
         currentHole = 0;
-        clubPhotoPath = "";
         System.arraycopy(defaultPars, 0, pars, 0, HOLES);
         for (int p = 0; p < PLAYERS; p++) {
             playerNames[p] = "Player " + (p + 1);
@@ -1156,32 +1130,79 @@ public class MainActivity extends Activity {
         for (int h = 0; h < HOLES; h++) {
             player1Putts[h] = 0;
             teeResults[h] = 0;
-            directions[h] = 0;
+            teeClubs[h] = getClubList()[0];
         }
         registrationMode = keepMode;
     }
 
+    private ArrayList<RoundRecord> loadHistoryRecords() {
+        ArrayList<RoundRecord> list = new ArrayList<>();
+        String raw = prefs().getString(KEY_HISTORY, "");
+        if (TextUtils.isEmpty(raw)) return list;
+        for (String line : raw.split("\n", -1)) {
+            RoundRecord r = RoundRecord.fromLine(line);
+            if (r != null) list.add(r);
+        }
+        return list;
+    }
+
+    private void saveHistoryRecords(ArrayList<RoundRecord> list) {
+        ArrayList<String> lines = new ArrayList<>();
+        for (int i = 0; i < list.size() && i < 300; i++) lines.add(list.get(i).toLine());
+        prefs().edit().putString(KEY_HISTORY, TextUtils.join("\n", lines)).commit();
+    }
+
+    private String[] getClubList() {
+        String raw = prefs().getString(KEY_CLUBS, "DR,3W,5W,UT,5I,6I,7I,8I,9I,PW,50,56,60,PT");
+        String[] parts = raw.split(",");
+        ArrayList<String> out = new ArrayList<>();
+        for (String s : parts) {
+            String v = s.trim();
+            if (!TextUtils.isEmpty(v)) out.add(v);
+        }
+        if (out.isEmpty()) out.add("DR");
+        return out.toArray(new String[0]);
+    }
+
     private boolean hasAnyDraft() {
-        if (!TextUtils.isEmpty(courseText) || !TextUtils.isEmpty(teeText) || !TextUtils.isEmpty(startTimeText) || !TextUtils.isEmpty(clubPhotoPath)) return true;
+        if (!TextUtils.isEmpty(courseText) || !TextUtils.isEmpty(teeText) || !TextUtils.isEmpty(startTimeText)) return true;
         for (int p = 0; p < PLAYERS; p++) for (int h = 0; h < HOLES; h++) if (scores[p][h] > 0) return true;
         return false;
     }
 
-    private boolean isHoleComplete(int hole) {
-        for (int p = 0; p < activePlayers; p++) if (scores[p][hole] == 0) return false;
+    private boolean holeComplete(int h) {
+        for (int p = 0; p < activePlayers; p++) if (scores[p][h] == 0) return false;
         return true;
     }
 
-    private int countMissingScores() {
-        int missing = 0;
-        for (int p = 0; p < activePlayers; p++) for (int h = 0; h < HOLES; h++) if (scores[p][h] == 0) missing++;
-        return missing;
+    private int missingScores() {
+        int m = 0;
+        for (int p = 0; p < activePlayers; p++) for (int h = 0; h < HOLES; h++) if (scores[p][h] == 0) m++;
+        return m;
     }
 
-    private int countEnteredForPlayer(int player) {
-        int count = 0;
-        for (int h = 0; h < HOLES; h++) if (scores[player][h] > 0) count++;
-        return count;
+    private int entered(int p) {
+        int n = 0;
+        for (int h = 0; h < HOLES; h++) if (scores[p][h] > 0) n++;
+        return n;
+    }
+
+    private int countTee(int code) {
+        int n = 0;
+        for (int v : teeResults) if (v == code) n++;
+        return n;
+    }
+
+    private int countTeeTargets() {
+        int n = 0;
+        for (int v : teeResults) if (v > 0) n++;
+        return n;
+    }
+
+    private int diffByPar(int par) {
+        int d = 0;
+        for (int h = 0; h < HOLES; h++) if (pars[h] == par && scores[0][h] > 0) d += scores[0][h] - pars[h];
+        return d;
     }
 
     private int totalScore(int player) {
@@ -1190,54 +1211,196 @@ public class MainActivity extends Activity {
         return total;
     }
 
-    private int totalParForEntered(int player) {
+    private int sum(int[] a) {
         int total = 0;
-        for (int h = 0; h < HOLES; h++) if (scores[player][h] > 0) total += pars[h];
+        for (int v : a) total += v;
         return total;
     }
 
-    private int sum(int[] values) {
-        int total = 0;
-        for (int value : values) total += value;
-        return total;
-    }
-
-    private int countTeeResult(int result) {
-        int count = 0;
-        for (int value : teeResults) if (value == result) count++;
-        return count;
-    }
-
-    private int countTeeTargets() {
-        int count = 0;
-        for (int value : teeResults) if (value > 0) count++;
-        return count;
-    }
-
-    private ArrayList<RoundRecord> loadHistoryRecords() {
-        ArrayList<RoundRecord> records = new ArrayList<>();
-        String raw = getPrefs().getString(KEY_HISTORY, "");
-        if (TextUtils.isEmpty(raw)) return records;
-        String[] lines = raw.split("\n", -1);
-        for (String line : lines) {
-            if (TextUtils.isEmpty(line)) continue;
-            RoundRecord record = RoundRecord.fromLine(line);
-            if (record != null) records.add(record);
+    private String rowValues(int[] values, boolean hideZero) {
+        StringBuilder b = new StringBuilder();
+        int out = 0, in = 0, total = 0;
+        for (int h = 0; h < HOLES; h++) {
+            int v = values[h];
+            b.append(hideZero && v == 0 ? " - " : pad2(v));
+            if (h < 9) out += v; else in += v;
+            total += v;
+            if (h == 8) b.append("|").append(pad2(out)).append("|");
         }
-        return records;
+        b.append("|").append(pad2(in)).append("|").append(pad3(total));
+        return b.toString();
     }
 
-    private void saveHistoryRecords(ArrayList<RoundRecord> records) {
-        ArrayList<String> lines = new ArrayList<>();
-        for (int i = 0; i < records.size() && i < 200; i++) lines.add(records.get(i).toLine());
-        getPrefs().edit().putString(KEY_HISTORY, TextUtils.join("\n", lines)).commit();
+    private int[] uniqueScoreValues(int[] input) {
+        ArrayList<Integer> out = new ArrayList<>();
+        for (int v : input) {
+            int b = bound(v, 1, SCORE_MAX);
+            if (!out.contains(b)) out.add(b);
+        }
+        int[] arr = new int[out.size()];
+        for (int i = 0; i < out.size(); i++) arr[i] = out.get(i);
+        return arr;
     }
 
-    private void attachTextWatcher(EditText editText, TextValueSink sink) {
-        editText.addTextChangedListener(new TextWatcher() {
+    private int[] deserializeIntArray(String raw, int length, int fallback) {
+        int[] arr = new int[length];
+        for (int i = 0; i < length; i++) arr[i] = fallback;
+        if (TextUtils.isEmpty(raw)) return arr;
+        String[] parts = raw.split(",", -1);
+        for (int i = 0; i < length && i < parts.length; i++) arr[i] = parseInt(parts[i], fallback);
+        return arr;
+    }
+
+    private String[] deserializeStringArray(String raw, int length, String fallback) {
+        String[] arr = new String[length];
+        for (int i = 0; i < length; i++) arr[i] = fallback;
+        if (TextUtils.isEmpty(raw)) return arr;
+        String[] parts = raw.split(",", -1);
+        for (int i = 0; i < length && i < parts.length; i++) arr[i] = decode(parts[i]);
+        return arr;
+    }
+
+    private String serializeIntArray(int[] arr) {
+        ArrayList<String> list = new ArrayList<>();
+        for (int v : arr) list.add(String.valueOf(v));
+        return TextUtils.join(",", list);
+    }
+
+    private void restoreIntArray(String raw, int[] target, int[] fallback, int min, int max) {
+        if (fallback != null) System.arraycopy(fallback, 0, target, 0, Math.min(fallback.length, target.length));
+        if (TextUtils.isEmpty(raw)) return;
+        String[] parts = raw.split(",", -1);
+        for (int i = 0; i < target.length && i < parts.length; i++) target[i] = bound(parseInt(parts[i], target[i]), min, max);
+    }
+
+    private String serializeStringArray(String[] arr) {
+        ArrayList<String> list = new ArrayList<>();
+        for (String s : arr) list.add(encode(s == null ? "" : s));
+        return TextUtils.join(",", list);
+    }
+
+    private void restoreStringArray(String raw, String[] target) {
+        if (TextUtils.isEmpty(raw)) return;
+        String[] parts = raw.split(",", -1);
+        for (int i = 0; i < target.length && i < parts.length; i++) target[i] = decode(parts[i]);
+    }
+
+    private View hero(String title, String sub) {
+        LinearLayout card = card();
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(getResources().getIdentifier("ic_launcher", "drawable", getPackageName()));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(68), dp(68));
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        card.addView(logo, lp);
+        TextView t = text(title, 25, COLOR_TEXT, true);
+        t.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.addView(t);
+        TextView s = text(sub, 13, COLOR_MUTED, false);
+        s.setGravity(Gravity.CENTER_HORIZONTAL);
+        s.setPadding(0, dp(4), 0, 0);
+        card.addView(s);
+        return card;
+    }
+
+    private LinearLayout card() {
+        LinearLayout v = new LinearLayout(this);
+        v.setOrientation(LinearLayout.VERTICAL);
+        v.setPadding(dp(14), dp(14), dp(14), dp(14));
+        v.setBackground(rounded(COLOR_CARD, COLOR_BORDER, 18));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        p.setMargins(0, dp(6), 0, dp(6));
+        v.setLayoutParams(p);
+        return v;
+    }
+
+    private LinearLayout lite() {
+        LinearLayout v = new LinearLayout(this);
+        v.setOrientation(LinearLayout.VERTICAL);
+        v.setPadding(dp(10), dp(10), dp(10), dp(10));
+        v.setBackground(rounded(0xFFF8FAFC, COLOR_BORDER, 16));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        p.setMargins(0, dp(5), 0, dp(5));
+        v.setLayoutParams(p);
+        return v;
+    }
+
+    private GradientDrawable rounded(int fill, int stroke, int radius) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(fill);
+        g.setCornerRadius(dp(radius));
+        g.setStroke(dp(1), stroke);
+        return g;
+    }
+
+    private TextView section(String s) {
+        TextView v = text(s, 16, COLOR_TEXT, true);
+        v.setPadding(0, 0, 0, dp(8));
+        return v;
+    }
+
+    private TextView panel(String s, boolean important) {
+        TextView v = text(s, important ? 15 : 13, COLOR_TEXT, important);
+        v.setBackground(rounded(important ? COLOR_PRIMARY_SOFT : COLOR_PANEL, important ? COLOR_PRIMARY_SOFT : COLOR_BORDER, 14));
+        v.setPadding(dp(12), dp(12), dp(12), dp(12));
+        return v;
+    }
+
+    private TextView text(String s, int size, int color, boolean bold) {
+        TextView v = new TextView(this);
+        v.setText(s);
+        v.setTextSize(size);
+        v.setTextColor(color);
+        if (bold) v.setTypeface(Typeface.DEFAULT_BOLD);
+        return v;
+    }
+
+    private Button button(String label, boolean primary) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(14);
+        b.setTextColor(0xFFFFFFFF);
+        b.setMinHeight(dp(48));
+        b.setBackgroundResource(getResources().getIdentifier(primary ? "button_bg" : "secondary_button_bg", "drawable", getPackageName()));
+        return b;
+    }
+
+    private Button choice(String label, boolean selected) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(15);
+        b.setTextColor(selected ? 0xFFFFFFFF : COLOR_TEXT);
+        b.setMinHeight(dp(50));
+        b.setBackground(rounded(selected ? COLOR_PRIMARY : 0xFFFFFFFF, selected ? COLOR_PRIMARY_DARK : COLOR_BORDER, 14));
+        return b;
+    }
+
+    private EditText input(String hint) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setTextSize(14);
+        e.setSingleLine(true);
+        e.setTextColor(COLOR_TEXT);
+        e.setHintTextColor(0xFF94A3B8);
+        e.setInputType(InputType.TYPE_CLASS_TEXT);
+        e.setPadding(dp(8), dp(6), dp(8), dp(6));
+        return e;
+    }
+
+    private Spinner spinner(String[] values) {
+        Spinner s = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, values);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(adapter);
+        return s;
+    }
+
+    private void watch(EditText e, TextSink sink) {
+        e.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if (binding) return;
                 sink.set(s == null ? "" : s.toString());
                 saveDraft(false);
             }
@@ -1245,305 +1408,98 @@ public class MainActivity extends Activity {
         });
     }
 
-    private Spinner spinner(String[] values) {
-        Spinner spinner = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, values);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinner.setAdapter(adapter);
-        spinner.setMinimumWidth(dp(100));
-        return spinner;
+    private LinearLayout.LayoutParams fullWidth() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        p.setMargins(0, dp(5), 0, dp(5));
+        return p;
     }
 
-    private LinearLayout card() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(rounded(COLOR_CARD, COLOR_BORDER, 18));
-        card.setPadding(dp(14), dp(14), dp(14), dp(14));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, dp(6), 0, dp(6));
-        card.setLayoutParams(params);
-        return card;
+    private LinearLayout.LayoutParams weighted(float w) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, w);
+        p.setMargins(dp(2), dp(2), dp(2), dp(2));
+        return p;
     }
 
-    private LinearLayout cardLite() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(rounded(0xFFF8FAFC, COLOR_BORDER, 16));
-        card.setPadding(dp(10), dp(10), dp(10), dp(10));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, dp(6), 0, dp(6));
-        card.setLayoutParams(params);
-        return card;
-    }
+    private String displayName(int p) { return TextUtils.isEmpty(playerNames[p]) ? "Player " + (p + 1) : playerNames[p].trim(); }
+    private String courseTextOrDefault() { return TextUtils.isEmpty(courseText) ? "未入力コース" : courseText; }
+    private String shortName(String s) { if (TextUtils.isEmpty(s)) return "P   "; String n = s.length() > 4 ? s.substring(0, 4) : s; while (n.length() < 4) n += " "; return n; }
+    private String pad2(int v) { if (v <= 0) return " - "; return v < 10 ? " " + v + " " : v + " "; }
+    private String pad3(int v) { if (v < 10) return "  " + v; if (v < 100) return " " + v; return String.valueOf(v); }
+    private String percent(int a, int b) { return b == 0 ? "-" : format1(a * 100.0 / b) + "%"; }
+    private String format1(double d) { return String.format(Locale.US, "%.1f", d); }
+    private int bound(int v, int min, int max) { return Math.max(min, Math.min(max, v)); }
+    private int parseInt(String s, int f) { try { return Integer.parseInt(s.trim()); } catch (Exception e) { return f; } }
+    private long parseLong(String s, long f) { try { return Long.parseLong(s.trim()); } catch (Exception e) { return f; } }
+    private long parseDate(String s) { try { Date d = new SimpleDateFormat("yyyy/MM/dd", Locale.US).parse(s); return d == null ? System.currentTimeMillis() : d.getTime(); } catch (Exception e) { return System.currentTimeMillis(); } }
+    private String encode(String s) { return Base64.encodeToString((s == null ? "" : s).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP); }
+    private String decode(String s) { try { return new String(Base64.decode(s, Base64.NO_WRAP), StandardCharsets.UTF_8); } catch (Exception e) { return ""; } }
+    private String nowDate() { return new SimpleDateFormat("yyyy/MM/dd", Locale.US).format(new Date()); }
+    private String nowFile() { return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()); }
+    private String nowFull() { return new SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.US).format(new Date()); }
+    private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
+    private SharedPreferences prefs() { return getSharedPreferences(PREF_NAME, MODE_PRIVATE); }
+    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
+    private void scrollTop() { if (scrollView != null) scrollView.post(() -> scrollView.fullScroll(View.FOCUS_UP)); }
+    private void restoreScroll(int y) { if (scrollView != null) scrollView.post(() -> scrollView.scrollTo(0, y)); }
+    private void copyText(String label, String value) { ClipboardManager c = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE); if (c != null) c.setPrimaryClip(ClipData.newPlainText(label, value)); }
+    private ArrayList<String> wrap(String line, int max) { ArrayList<String> r = new ArrayList<>(); if (line == null) line = ""; if (line.length() == 0) { r.add(""); return r; } for (int i = 0; i < line.length(); i += max) r.add(line.substring(i, Math.min(line.length(), i + max))); return r; }
+    private void startAutoSaveTimer() { autoSaveHandler.removeCallbacks(autoSaveRunnable); autoSaveHandler.postDelayed(autoSaveRunnable, AUTO_SAVE_INTERVAL_MS); }
 
-    private GradientDrawable rounded(int fillColor, int strokeColor, int radiusDp) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(fillColor);
-        drawable.setCornerRadius(dp(radiusDp));
-        drawable.setStroke(dp(1), strokeColor);
-        return drawable;
-    }
-
-    private LinearLayout.LayoutParams weightedParams(float weight, int horizontalMargin, int verticalMargin) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
-        params.setMargins(horizontalMargin, verticalMargin, horizontalMargin, verticalMargin);
-        return params;
-    }
-
-    private LinearLayout.LayoutParams fullWidthButtonParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, dp(5), 0, dp(5));
-        return params;
-    }
-
-    private Button button(String label, boolean primary) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextSize(15);
-        button.setTextColor(0xFFFFFFFF);
-        button.setAllCaps(false);
-        button.setMinHeight(dp(50));
-        button.setBackgroundResource(getResources().getIdentifier(primary ? "button_bg" : "secondary_button_bg", "drawable", getPackageName()));
-        return button;
-    }
-
-    private Button choiceButton(String label, boolean selected) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setAllCaps(false);
-        button.setTextSize(15);
-        button.setTextColor(selected ? 0xFFFFFFFF : COLOR_TEXT);
-        button.setMinHeight(dp(52));
-        button.setBackground(rounded(selected ? COLOR_PRIMARY : 0xFFFFFFFF, selected ? COLOR_PRIMARY_DARK : COLOR_BORDER, 16));
-        return button;
-    }
-
-    private EditText normalInput(String hint) {
-        EditText input = new EditText(this);
-        input.setHint(hint);
-        input.setTextSize(15);
-        input.setSingleLine(true);
-        input.setPadding(dp(10), dp(8), dp(10), dp(8));
-        input.setTextColor(COLOR_TEXT);
-        input.setHintTextColor(0xFF94A3B8);
-        input.setInputType(InputType.TYPE_CLASS_TEXT);
-        return input;
-    }
-
-    private TextView sectionCompact(String value) {
-        TextView view = text(value, 16, COLOR_TEXT, true);
-        view.setPadding(0, 0, 0, dp(8));
-        return view;
-    }
-
-    private TextView panel(String value, boolean important) {
-        TextView view = text(value, important ? 15 : 13, important ? COLOR_TEXT : 0xFF1E293B, important);
-        view.setBackground(rounded(important ? COLOR_PRIMARY_SOFT : COLOR_PANEL, important ? COLOR_PRIMARY_SOFT : COLOR_BORDER, 14));
-        view.setPadding(dp(12), dp(12), dp(12), dp(12));
-        return view;
-    }
-
-    private TextView text(String value, int size, int color, boolean bold) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextSize(size);
-        view.setTextColor(color);
-        if (bold) view.setTypeface(Typeface.DEFAULT_BOLD);
-        return view;
-    }
-
-    private String displayPlayerName(int index) {
-        String name = playerNames[index];
-        return TextUtils.isEmpty(name) ? "Player " + (index + 1) : name.trim();
-    }
-
-    private String shortName(String name) {
-        if (TextUtils.isEmpty(name)) return "P";
-        String n = name.length() > 4 ? name.substring(0, 4) : name;
-        while (n.length() < 4) n += " ";
-        return n;
-    }
-
-    private String formatValue(int value) {
-        return value <= 0 ? "-" : String.valueOf(value);
-    }
-
-    private String pad2(int value) {
-        if (value <= 0) return " - ";
-        return value < 10 ? " " + value + " " : value + " ";
-    }
-
-    private String pad3(int value) {
-        if (value <= 0) return "  -";
-        if (value < 10) return "  " + value;
-        if (value < 100) return " " + value;
-        return String.valueOf(value);
-    }
-
-    private String serializeIntArray(int[] values) {
-        ArrayList<String> parts = new ArrayList<>();
-        for (int value : values) parts.add(String.valueOf(value));
-        return TextUtils.join(",", parts);
-    }
-
-    private void restoreIntArray(String saved, int[] target, int[] fallback, int min, int max) {
-        if (fallback != null && fallback.length == target.length) System.arraycopy(fallback, 0, target, 0, target.length);
-        if (TextUtils.isEmpty(saved)) return;
-        String[] parts = saved.split(",", -1);
-        for (int i = 0; i < target.length && i < parts.length; i++) target[i] = bound(parseInt(parts[i], target[i]), min, max);
-    }
-
-    private String serializeStringArray(String[] values) {
-        ArrayList<String> parts = new ArrayList<>();
-        for (String value : values) parts.add(encode(value == null ? "" : value));
-        return TextUtils.join(",", parts);
-    }
-
-    private void restoreStringArray(String saved, String[] target) {
-        if (TextUtils.isEmpty(saved)) return;
-        String[] parts = saved.split(",", -1);
-        for (int i = 0; i < target.length && i < parts.length; i++) target[i] = decode(parts[i]);
-    }
-
-    private String encode(String value) {
-        return Base64.encodeToString(value.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-    }
-
-    private String decode(String value) {
-        try {
-            return new String(Base64.decode(value, Base64.NO_WRAP), StandardCharsets.UTF_8);
-        } catch (Exception ignored) {
-            return "";
-        }
-    }
-
-    private int parseInt(String text, int fallback) {
-        try {
-            return Integer.parseInt(text.trim());
-        } catch (Exception ignored) {
-            return fallback;
-        }
-    }
-
-    private long parseLong(String text, long fallback) {
-        try {
-            return Long.parseLong(text.trim());
-        } catch (Exception ignored) {
-            return fallback;
-        }
-    }
-
-    private long parseDateMillis(String date) {
-        try {
-            Date parsed = new SimpleDateFormat("yyyy/MM/dd", Locale.US).parse(date);
-            return parsed == null ? System.currentTimeMillis() : parsed.getTime();
-        } catch (Exception ignored) {
-            return System.currentTimeMillis();
-        }
-    }
-
-    private int bound(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
-    }
-
-    private String nowDate() {
-        return new SimpleDateFormat("yyyy/MM/dd", Locale.US).format(new Date());
-    }
-
-    private String nowFull() {
-        return new SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.US).format(new Date());
-    }
-
-    private SharedPreferences getPrefs() {
-        return getSharedPreferences(PREF_NAME, MODE_PRIVATE);
-    }
-
-    private void copyText(String label, String value) {
-        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText(label, value));
-    }
-
-    private void startAutoSaveTimer() {
-        autoSaveHandler.removeCallbacks(autoSaveRunnable);
-        autoSaveHandler.postDelayed(autoSaveRunnable, AUTO_SAVE_INTERVAL_MS);
-    }
-
-    private void scrollTop() {
-        if (scrollView != null) scrollView.post(() -> scrollView.fullScroll(View.FOCUS_UP));
-    }
-
-    private void restoreScroll(int y) {
-        if (scrollView != null) scrollView.post(() -> scrollView.scrollTo(0, y));
-    }
-
-    private int dp(int value) {
-        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
-    }
-
-    private interface TextValueSink {
-        void set(String value);
-    }
-
-    private static class TeeChoice {
-        String label;
-        int result;
-        int direction;
-        TeeChoice(String label, int result, int direction) {
-            this.label = label;
-            this.result = result;
-            this.direction = direction;
-        }
-    }
+    private interface TextSink { void set(String value); }
 
     private static class RoundRecord {
         long timestamp;
-        String date;
-        String course;
+        String date = "";
+        String course = "";
+        String tee = "";
         int total;
-        int parTotal;
         int putts;
-        int fwKeep;
-        int fwTarget;
-        String detail;
-        String scoreCard;
-        String clubPhotoPath;
+        int bestDiff;
+        int fw;
+        int teeShots;
+        String pars = "";
+        String p1Scores = "";
+        String puttArray = "";
+        String teeResults = "";
+        String teeClubs = "";
+        String clubPhoto = "";
+        String scoreCard = "";
+        String analysis = "";
 
         String toLine() {
-            return timestamp + "|" + enc(date) + "|" + enc(course) + "|" + total + "|" + parTotal + "|" + putts + "|" + fwKeep + "|" + fwTarget + "|" + enc(detail) + "|" + enc(scoreCard) + "|" + enc(clubPhotoPath);
+            return timestamp + "|" + enc(date) + "|" + enc(course) + "|" + enc(tee) + "|" + total + "|" + putts + "|" + bestDiff + "|" + fw + "|" + teeShots + "|" + enc(pars) + "|" + enc(p1Scores) + "|" + enc(puttArray) + "|" + enc(teeResults) + "|" + enc(teeClubs) + "|" + enc(clubPhoto) + "|" + enc(scoreCard) + "|" + enc(analysis);
         }
 
         static RoundRecord fromLine(String line) {
             try {
-                String[] parts = line.split("\\|", -1);
-                if (parts.length < 9) return null;
+                if (TextUtils.isEmpty(line)) return null;
+                String[] p = line.split("\\|", -1);
+                if (p.length < 17) return null;
                 RoundRecord r = new RoundRecord();
-                r.timestamp = Long.parseLong(parts[0]);
-                r.date = dec(parts[1]);
-                r.course = dec(parts[2]);
-                r.total = Integer.parseInt(parts[3]);
-                r.parTotal = Integer.parseInt(parts[4]);
-                r.putts = Integer.parseInt(parts[5]);
-                r.fwKeep = Integer.parseInt(parts[6]);
-                r.fwTarget = Integer.parseInt(parts[7]);
-                r.detail = dec(parts[8]);
-                r.scoreCard = parts.length > 9 ? dec(parts[9]) : r.detail;
-                r.clubPhotoPath = parts.length > 10 ? dec(parts[10]) : "";
+                r.timestamp = Long.parseLong(p[0]);
+                r.date = dec(p[1]);
+                r.course = dec(p[2]);
+                r.tee = dec(p[3]);
+                r.total = Integer.parseInt(p[4]);
+                r.putts = Integer.parseInt(p[5]);
+                r.bestDiff = Integer.parseInt(p[6]);
+                r.fw = Integer.parseInt(p[7]);
+                r.teeShots = Integer.parseInt(p[8]);
+                r.pars = dec(p[9]);
+                r.p1Scores = dec(p[10]);
+                r.puttArray = dec(p[11]);
+                r.teeResults = dec(p[12]);
+                r.teeClubs = dec(p[13]);
+                r.clubPhoto = dec(p[14]);
+                r.scoreCard = dec(p[15]);
+                r.analysis = dec(p[16]);
                 return r;
-            } catch (Exception ignored) {
+            } catch (Exception e) {
                 return null;
             }
         }
 
-        private static String enc(String value) {
-            return Base64.encodeToString((value == null ? "" : value).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-        }
-
-        private static String dec(String value) {
-            try {
-                return new String(Base64.decode(value, Base64.NO_WRAP), StandardCharsets.UTF_8);
-            } catch (Exception ignored) {
-                return "";
-            }
-        }
+        private static String enc(String s) { return Base64.encodeToString((s == null ? "" : s).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP); }
+        private static String dec(String s) { try { return new String(Base64.decode(s, Base64.NO_WRAP), StandardCharsets.UTF_8); } catch (Exception e) { return ""; } }
     }
 }
