@@ -58,7 +58,6 @@ public class MainActivity extends Activity {
     private static final int COLOR_MUTED = 0xFF64748B;
     private static final int COLOR_BORDER = 0xFFE2E8F0;
     private static final int COLOR_PANEL = 0xFFEFF6FF;
-    private static final int COLOR_WARN_SOFT = 0xFFFEF3C7;
     private static final int COLOR_DANGER_SOFT = 0xFFFEE2E2;
 
     private final int[] defaultPars = {4, 4, 3, 5, 4, 4, 5, 3, 4, 4, 5, 4, 3, 4, 4, 5, 3, 4};
@@ -102,7 +101,7 @@ public class MainActivity extends Activity {
         initDefaults();
         restoreDraft();
         setContentView(createBaseView());
-        if (registrationMode) renderRegistrationScreen();
+        if (registrationMode) renderRegistrationScreen(false);
         else renderHomeScreen();
         startAutoSaveTimer();
     }
@@ -164,7 +163,7 @@ public class MainActivity extends Activity {
         LinearLayout card = card();
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         ImageView logo = new ImageView(this);
-        logo.setImageResource(getResources().getIdentifier("nk_logo", "drawable", getPackageName()));
+        logo.setImageResource(getResources().getIdentifier("ic_launcher", "drawable", getPackageName()));
         LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(72), dp(72));
         logoParams.gravity = Gravity.CENTER_HORIZONTAL;
         logoParams.setMargins(0, 0, 0, dp(8));
@@ -172,7 +171,7 @@ public class MainActivity extends Activity {
         TextView title = text("NK Score Manager", 27, COLOR_TEXT, true);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         card.addView(title);
-        TextView sub = text("候補ボタン入力・スコアカードPDF V1.6", 14, COLOR_MUTED, false);
+        TextView sub = text("候補ボタン入力・スコアカードPDF V1.6.1", 14, COLOR_MUTED, false);
         sub.setGravity(Gravity.CENTER_HORIZONTAL);
         sub.setPadding(0, dp(4), 0, 0);
         card.addView(sub);
@@ -190,7 +189,7 @@ public class MainActivity extends Activity {
             Button resume = button("入力中のラウンドに戻る", true);
             resume.setOnClickListener(v -> {
                 registrationMode = true;
-                renderRegistrationScreen();
+                renderRegistrationScreen(false);
                 saveDraft(false);
             });
             card.addView(resume, fullWidthButtonParams());
@@ -199,7 +198,7 @@ public class MainActivity extends Activity {
         Button start = button("新規スコア登録", true);
         start.setOnClickListener(v -> {
             resetRound(true);
-            renderRegistrationScreen();
+            renderRegistrationScreen(false);
             saveDraft(false);
         });
         card.addView(start, fullWidthButtonParams());
@@ -209,9 +208,7 @@ public class MainActivity extends Activity {
     private View createStatsCard() {
         LinearLayout card = card();
         card.addView(sectionCompact("平均・傾向"));
-        ArrayList<RoundRecord> records = loadHistoryRecords();
-        TextView stats = panel(buildStatsText(records), true);
-        card.addView(stats);
+        card.addView(panel(buildStatsText(loadHistoryRecords()), true));
         return card;
     }
 
@@ -227,8 +224,7 @@ public class MainActivity extends Activity {
             for (int i = 0; i < records.size() && i < 30; i++) {
                 RoundRecord record = records.get(i);
                 LinearLayout row = cardLite();
-                TextView summary = text(record.date + "  " + record.course + "\nPlayer1 TOTAL: " + record.total + " / PAT: " + record.putts + " / FW: " + record.fwKeep + "/" + record.fwTarget, 13, COLOR_TEXT, true);
-                row.addView(summary);
+                row.addView(text(record.date + "  " + record.course + "\nPlayer1 TOTAL: " + record.total + " / PAT: " + record.putts + " / FW: " + record.fwKeep + "/" + record.fwTarget, 13, COLOR_TEXT, true));
                 LinearLayout actions = new LinearLayout(this);
                 actions.setOrientation(LinearLayout.HORIZONTAL);
                 Button detail = button("詳細", false);
@@ -256,7 +252,8 @@ public class MainActivity extends Activity {
         return card;
     }
 
-    private void renderRegistrationScreen() {
+    private void renderRegistrationScreen(boolean keepScrollPosition) {
+        final int scrollY = keepScrollPosition && scrollView != null ? scrollView.getScrollY() : 0;
         registrationMode = true;
         root.removeAllViews();
         root.addView(createRegistrationHeaderCard());
@@ -270,7 +267,8 @@ public class MainActivity extends Activity {
         saveStatusText.setGravity(Gravity.CENTER_HORIZONTAL);
         saveStatusText.setPadding(0, dp(10), 0, dp(8));
         root.addView(saveStatusText);
-        scrollTop();
+        if (keepScrollPosition) restoreScroll(scrollY);
+        else scrollTop();
     }
 
     private View createRegistrationHeaderCard() {
@@ -278,7 +276,7 @@ public class MainActivity extends Activity {
         TextView title = text("スコア登録モード", 22, COLOR_TEXT, true);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         card.addView(title);
-        TextView sub = text("候補ボタンを押すだけ。カート移動中でも片手で入力しやすい画面です。", 13, COLOR_MUTED, false);
+        TextView sub = text("候補ボタンを押しても、入力位置は上に戻りません。", 13, COLOR_MUTED, false);
         sub.setGravity(Gravity.CENTER_HORIZONTAL);
         sub.setPadding(0, dp(6), 0, 0);
         card.addView(sub);
@@ -288,8 +286,7 @@ public class MainActivity extends Activity {
     private View createProgressCard() {
         LinearLayout card = card();
         card.addView(sectionCompact("入力進捗"));
-        TextView text = panel("現在 " + (currentHole + 1) + "H / 18H\nPlayer1: " + countEnteredForPlayer(0) + "/18  /  全体未入力: " + countMissingScores(), true);
-        card.addView(text);
+        card.addView(panel("現在 " + (currentHole + 1) + "H / 18H\nPlayer1: " + countEnteredForPlayer(0) + "/18  /  全体未入力: " + countMissingScores(), true));
         card.addView(holeJumpGrid());
         return card;
     }
@@ -314,7 +311,7 @@ public class MainActivity extends Activity {
                 b.setOnClickListener(v -> {
                     currentHole = target;
                     saveDraft(false);
-                    renderRegistrationScreen();
+                    renderRegistrationScreen(false);
                 });
                 line.addView(b, weightedParams(1f, dp(2), dp(2)));
             }
@@ -353,7 +350,9 @@ public class MainActivity extends Activity {
         countRow.setGravity(Gravity.CENTER_VERTICAL);
         countRow.addView(text("入力人数", 15, COLOR_TEXT, true), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         Spinner playerCountSpinner = spinner(playerCountOptions);
+        binding = true;
         playerCountSpinner.setSelection(activePlayers - 1);
+        binding = false;
         playerCountSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (binding) return;
@@ -361,7 +360,7 @@ public class MainActivity extends Activity {
                 if (next != activePlayers) {
                     activePlayers = next;
                     saveDraft(false);
-                    renderRegistrationScreen();
+                    renderRegistrationScreen(true);
                 }
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
@@ -407,7 +406,7 @@ public class MainActivity extends Activity {
             b.setOnClickListener(v -> {
                 pars[currentHole] = value;
                 saveDraft(false);
-                renderRegistrationScreen();
+                renderRegistrationScreen(true);
             });
             row.addView(b, weightedParams(1f, dp(3), dp(3)));
         }
@@ -452,7 +451,7 @@ public class MainActivity extends Activity {
                 b.setOnClickListener(v -> {
                     scores[player][currentHole] = score;
                     saveDraft(false);
-                    renderRegistrationScreen();
+                    renderRegistrationScreen(true);
                 });
                 line.addView(b, weightedParams(1f, dp(2), dp(2)));
             }
@@ -462,7 +461,7 @@ public class MainActivity extends Activity {
         clear.setOnClickListener(v -> {
             scores[player][currentHole] = 0;
             saveDraft(false);
-            renderRegistrationScreen();
+            renderRegistrationScreen(true);
         });
         group.addView(clear, fullWidthButtonParams());
         return group;
@@ -483,7 +482,7 @@ public class MainActivity extends Activity {
             b.setOnClickListener(v -> {
                 player1Putts[currentHole] = putt;
                 saveDraft(false);
-                renderRegistrationScreen();
+                renderRegistrationScreen(true);
             });
             row.addView(b, weightedParams(1f, dp(2), dp(2)));
         }
@@ -492,7 +491,7 @@ public class MainActivity extends Activity {
         clear.setOnClickListener(v -> {
             player1Putts[currentHole] = 0;
             saveDraft(false);
-            renderRegistrationScreen();
+            renderRegistrationScreen(true);
         });
         group.addView(clear, fullWidthButtonParams());
         return group;
@@ -505,21 +504,15 @@ public class MainActivity extends Activity {
         TextView label = text("ティーショット（結果＋方向性を1タップ）", 12, COLOR_MUTED, true);
         label.setGravity(Gravity.CENTER_HORIZONTAL);
         group.addView(label);
-        addTeeRow(group, new TeeChoice[]{
-                new TeeChoice("FW左", 1, 1), new TeeChoice("FW中", 1, 2), new TeeChoice("FW右", 1, 3)
-        });
-        addTeeRow(group, new TeeChoice[]{
-                new TeeChoice("ラフ左", 2, 1), new TeeChoice("ラフ中", 2, 2), new TeeChoice("ラフ右", 2, 3)
-        });
-        addTeeRow(group, new TeeChoice[]{
-                new TeeChoice("OB左", 3, 1), new TeeChoice("OB中", 3, 2), new TeeChoice("OB右", 3, 3)
-        });
+        addTeeRow(group, new TeeChoice[]{new TeeChoice("FW左", 1, 1), new TeeChoice("FW中", 1, 2), new TeeChoice("FW右", 1, 3)});
+        addTeeRow(group, new TeeChoice[]{new TeeChoice("ラフ左", 2, 1), new TeeChoice("ラフ中", 2, 2), new TeeChoice("ラフ右", 2, 3)});
+        addTeeRow(group, new TeeChoice[]{new TeeChoice("OB左", 3, 1), new TeeChoice("OB中", 3, 2), new TeeChoice("OB右", 3, 3)});
         Button clear = button("ティーショット未選択に戻す", false);
         clear.setOnClickListener(v -> {
             teeResults[currentHole] = 0;
             directions[currentHole] = 0;
             saveDraft(false);
-            renderRegistrationScreen();
+            renderRegistrationScreen(true);
         });
         group.addView(clear, fullWidthButtonParams());
         return group;
@@ -535,7 +528,7 @@ public class MainActivity extends Activity {
                 teeResults[currentHole] = choice.result;
                 directions[currentHole] = choice.direction;
                 saveDraft(false);
-                renderRegistrationScreen();
+                renderRegistrationScreen(true);
             });
             row.addView(b, weightedParams(1f, dp(3), dp(3)));
         }
@@ -590,7 +583,7 @@ public class MainActivity extends Activity {
     private void moveHole(int delta) {
         currentHole = bound(currentHole + delta, 0, HOLES - 1);
         saveDraft(false);
-        renderRegistrationScreen();
+        renderRegistrationScreen(false);
     }
 
     private void finishRound() {
@@ -598,7 +591,7 @@ public class MainActivity extends Activity {
         if (missing > 0) {
             Toast.makeText(this, "未入力スコアがあります: " + missing + "件", Toast.LENGTH_SHORT).show();
             registrationMode = true;
-            renderRegistrationScreen();
+            renderRegistrationScreen(true);
             return;
         }
         String scoreCard = buildScoreCardText(true);
@@ -651,9 +644,7 @@ public class MainActivity extends Activity {
         b.append("TEE: ").append(teeText).append("  START: ").append(startTimeText).append("\n\n");
         b.append("HOLE  1  2  3  4  5  6  7  8  9 |OUT|10 11 12 13 14 15 16 17 18 |IN |TOTAL\n");
         b.append("PAR  ").append(rowValues(pars, -1)).append("\n");
-        for (int p = 0; p < activePlayers; p++) {
-            b.append(shortName(displayPlayerName(p))).append("   ").append(rowValues(scores[p], p)).append("\n");
-        }
+        for (int p = 0; p < activePlayers; p++) b.append(shortName(displayPlayerName(p))).append("   ").append(rowValues(scores[p], p)).append("\n");
         b.append("\n").append(buildLiveSummary()).append("\n");
         if (full) {
             b.append("\nPlayer1 Tee Detail\n");
@@ -689,7 +680,7 @@ public class MainActivity extends Activity {
 
     private String buildExportText() {
         StringBuilder builder = new StringBuilder();
-        builder.append("NK Score Export V1.6\n");
+        builder.append("NK Score Export V1.6.1\n");
         builder.append("日付: ").append(dateText).append("\n");
         builder.append("コース: ").append(courseText).append("\n");
         builder.append("ティー: ").append(teeText).append("\n");
@@ -1182,6 +1173,10 @@ public class MainActivity extends Activity {
 
     private void scrollTop() {
         if (scrollView != null) scrollView.post(() -> scrollView.fullScroll(View.FOCUS_UP));
+    }
+
+    private void restoreScroll(int y) {
+        if (scrollView != null) scrollView.post(() -> scrollView.scrollTo(0, y));
     }
 
     private int dp(int value) {
