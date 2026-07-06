@@ -5,7 +5,9 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,14 +17,14 @@ import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.GridLayout;
-import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.NumberPicker;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -37,8 +39,16 @@ public class MainActivity extends Activity {
     private static final int HOLES = 18;
     private static final long AUTO_SAVE_INTERVAL_MS = 2500L;
     private static final String PREF_NAME = "nk_score_manager_beta";
-    private static final String KEY_DRAFT = "draft_text_v12";
-    private static final String KEY_ROUNDS = "rounds_text_v12";
+    private static final String KEY_DRAFT = "draft_text_v13";
+    private static final String KEY_ROUNDS = "rounds_text_v13";
+
+    private static final int COLOR_BG = 0xFFF8FAFC;
+    private static final int COLOR_CARD = 0xFFFFFFFF;
+    private static final int COLOR_PRIMARY = 0xFF166534;
+    private static final int COLOR_PRIMARY_SOFT = 0xFFDCFCE7;
+    private static final int COLOR_TEXT = 0xFF0F172A;
+    private static final int COLOR_MUTED = 0xFF64748B;
+    private static final int COLOR_BORDER = 0xFFE2E8F0;
 
     private final int[] defaultPars = {4, 4, 3, 5, 4, 4, 5, 3, 4, 4, 5, 4, 3, 4, 4, 5, 3, 4};
     private final String[] fwOptions = {"-", "KEEP", "左", "右", "ラフ", "バンカー", "OB", "1ペナ"};
@@ -53,12 +63,12 @@ public class MainActivity extends Activity {
     private TextView pastRoundsText;
     private TextView saveStatusText;
 
-    private final EditText[] parEdits = new EditText[HOLES];
-    private final EditText[] scoreEdits = new EditText[HOLES];
+    private final NumberPicker[] parPickers = new NumberPicker[HOLES];
+    private final NumberPicker[] scorePickers = new NumberPicker[HOLES];
     private final Spinner[] fwSpinners = new Spinner[HOLES];
-    private final EditText[] obEdits = new EditText[HOLES];
-    private final EditText[] penaltyEdits = new EditText[HOLES];
-    private final EditText[] puttEdits = new EditText[HOLES];
+    private final NumberPicker[] obPickers = new NumberPicker[HOLES];
+    private final NumberPicker[] penaltyPickers = new NumberPicker[HOLES];
+    private final NumberPicker[] puttPickers = new NumberPicker[HOLES];
     private final EditText[] noteEdits = new EditText[HOLES];
 
     private final Handler autoSaveHandler = new Handler(Looper.getMainLooper());
@@ -97,148 +107,290 @@ public class MainActivity extends Activity {
     }
 
     private View createContentView() {
+        boolean landscape = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+        int pagePadding = landscape ? dp(16) : dp(14);
+
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(0xFFF8FAFC);
+        scroll.setBackgroundColor(COLOR_BG);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(18), dp(18), dp(18));
-        scroll.addView(root);
+        root.setPadding(pagePadding, pagePadding, pagePadding, pagePadding);
+        scroll.addView(root, new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
 
-        ImageView logo = new ImageView(this);
-        logo.setImageResource(getResources().getIdentifier("nk_logo", "drawable", getPackageName()));
-        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(86), dp(86));
-        logoParams.gravity = Gravity.CENTER_HORIZONTAL;
-        root.addView(logo, logoParams);
+        root.addView(createHeroCard(landscape));
+        root.addView(createRoundInfoCard(landscape));
 
-        TextView title = text("NK Score Manager", 28, 0xFF0F172A, true);
-        title.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.addView(title);
-
-        TextView sub = text("18ホール入力・自動集計・履歴保存・テキスト出力 V1.2", 14, 0xFF475569, false);
-        sub.setGravity(Gravity.CENTER_HORIZONTAL);
-        sub.setPadding(0, dp(4), 0, dp(16));
-        root.addView(sub);
-
-        root.addView(section("ラウンド情報"));
-        dateEdit = normalInput("日付 例: " + nowDate());
-        dateEdit.setText(nowDate());
-        courseEdit = normalInput("ゴルフ場名 例: 有馬CC");
-        teeEdit = normalInput("ティー 例: ブルーティー");
-        playerEdit = normalInput("プレイヤー名");
-        startTimeEdit = normalInput("スタート時間 例: 08:35 / OUT / IN");
-        root.addView(dateEdit);
-        root.addView(courseEdit);
-        root.addView(teeEdit);
-        root.addView(playerEdit);
-        root.addView(startTimeEdit);
-
-        root.addView(section("スコア入力"));
-        TextView help = text("横にスクロールできます。PAR・SCORE・PUTTは数字、FWはKEEP/左右/OB等を選択します。", 13, 0xFF64748B, false);
-        help.setPadding(0, 0, 0, dp(8));
+        TextView inputTitle = section("スコア入力（スクロール式）");
+        root.addView(inputTitle);
+        TextView help = text("数字は上下スクロールで変更できます。横画面では2列表示になり、入力欄が広く使えます。", 13, COLOR_MUTED, false);
+        help.setPadding(dp(2), 0, dp(2), dp(8));
         root.addView(help);
 
-        HorizontalScrollView horizontal = new HorizontalScrollView(this);
-        GridLayout grid = new GridLayout(this);
-        grid.setColumnCount(8);
-        grid.setPadding(0, dp(6), 0, dp(6));
-        addHeader(grid, "H", 44);
-        addHeader(grid, "PAR", 64);
-        addHeader(grid, "SCORE", 76);
-        addHeader(grid, "FW", 118);
-        addHeader(grid, "OB", 64);
-        addHeader(grid, "Pen", 64);
-        addHeader(grid, "Putt", 64);
-        addHeader(grid, "メモ", 170);
-
-        for (int i = 0; i < HOLES; i++) {
-            addCell(grid, smallLabel(String.valueOf(i + 1), true), 44);
-            parEdits[i] = numberInput(String.valueOf(defaultPars[i]), 64);
-            scoreEdits[i] = numberInput("", 76);
-            fwSpinners[i] = spinner(fwOptions, 118);
-            obEdits[i] = numberInput("", 64);
-            penaltyEdits[i] = numberInput("", 64);
-            puttEdits[i] = numberInput("", 64);
-            noteEdits[i] = normalInput("メモ");
-            noteEdits[i].setSingleLine(true);
-            addCell(grid, parEdits[i], 64);
-            addCell(grid, scoreEdits[i], 76);
-            addCell(grid, fwSpinners[i], 118);
-            addCell(grid, obEdits[i], 64);
-            addCell(grid, penaltyEdits[i], 64);
-            addCell(grid, puttEdits[i], 64);
-            addCell(grid, noteEdits[i], 170);
-        }
-        horizontal.addView(grid);
-        root.addView(horizontal);
+        root.addView(createHoleList(landscape));
 
         root.addView(section("集計"));
-        summaryText = panel("集計待機中");
+        summaryText = panel("集計待機中", true);
         root.addView(summaryText);
 
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.VERTICAL);
-        buttons.setPadding(0, dp(12), 0, dp(4));
-        Button saveButton = button("このラウンドを履歴保存", true);
-        saveButton.setOnClickListener(v -> saveRound());
-        Button copyButton = button("出力テキストをコピー", false);
-        copyButton.setOnClickListener(v -> copyExportText());
-        Button clearButton = button("入力をリセット", false);
-        clearButton.setOnClickListener(v -> clearInputs());
-        buttons.addView(saveButton);
-        buttons.addView(copyButton);
-        buttons.addView(clearButton);
-        root.addView(buttons);
+        root.addView(createButtonArea(landscape));
 
-        saveStatusText = text("自動保存: 待機中", 13, 0xFF64748B, false);
+        saveStatusText = text("自動保存: 待機中", 13, COLOR_MUTED, false);
         saveStatusText.setGravity(Gravity.CENTER_HORIZONTAL);
+        saveStatusText.setPadding(0, dp(8), 0, dp(8));
         root.addView(saveStatusText);
 
         root.addView(section("出力テキスト"));
-        exportText = panel("出力内容はここに表示されます。");
+        exportText = panel("出力内容はここに表示されます。", false);
         root.addView(exportText);
 
         root.addView(section("保存済みラウンド"));
-        pastRoundsText = panel("保存済みラウンドはまだありません。");
+        pastRoundsText = panel("保存済みラウンドはまだありません。", false);
         root.addView(pastRoundsText);
 
-        TextView credit = text("© 株式会社NKテクニカルサポート", 13, 0xFF64748B, false);
+        TextView credit = text("© 株式会社NKテクニカルサポート", 13, COLOR_MUTED, false);
         credit.setGravity(Gravity.CENTER_HORIZONTAL);
         credit.setPadding(0, dp(24), 0, dp(8));
         root.addView(credit);
         return scroll;
     }
 
-    private void addHeader(GridLayout grid, String value, int widthDp) {
-        TextView view = smallLabel(value, true);
-        view.setBackgroundColor(0xFFDCFCE7);
-        addCell(grid, view, widthDp);
+    private View createHeroCard(boolean landscape) {
+        LinearLayout card = card();
+        card.setGravity(landscape ? Gravity.CENTER_VERTICAL : Gravity.CENTER_HORIZONTAL);
+        card.setOrientation(landscape ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(getResources().getIdentifier("nk_logo", "drawable", getPackageName()));
+        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(landscape ? 74 : 82), dp(landscape ? 74 : 82));
+        logoParams.gravity = landscape ? Gravity.CENTER_VERTICAL : Gravity.CENTER_HORIZONTAL;
+        logoParams.setMargins(0, 0, landscape ? dp(16) : 0, landscape ? 0 : dp(8));
+        card.addView(logo, logoParams);
+
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.setGravity(landscape ? Gravity.CENTER_VERTICAL : Gravity.CENTER_HORIZONTAL);
+
+        TextView title = text("NK Score Manager", landscape ? 26 : 28, COLOR_TEXT, true);
+        title.setGravity(landscape ? Gravity.START : Gravity.CENTER_HORIZONTAL);
+        texts.addView(title);
+
+        TextView sub = text("縦横レスポンシブ・スクロール入力・自動集計 V1.3", 14, COLOR_MUTED, false);
+        sub.setGravity(landscape ? Gravity.START : Gravity.CENTER_HORIZONTAL);
+        sub.setPadding(0, dp(4), 0, 0);
+        texts.addView(sub);
+
+        TextView badge = text("GOLF ROUND SCORE", 12, COLOR_PRIMARY, true);
+        badge.setGravity(landscape ? Gravity.START : Gravity.CENTER_HORIZONTAL);
+        badge.setPadding(0, dp(8), 0, 0);
+        texts.addView(badge);
+
+        card.addView(texts, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        return card;
     }
 
-    private void addCell(GridLayout grid, View view, int widthDp) {
-        GridLayout.LayoutParams params = new GridLayout.LayoutParams();
-        params.width = dp(widthDp);
-        params.height = GridLayout.LayoutParams.WRAP_CONTENT;
-        params.setMargins(dp(2), dp(2), dp(2), dp(2));
-        view.setLayoutParams(params);
-        grid.addView(view);
+    private View createRoundInfoCard(boolean landscape) {
+        LinearLayout card = card();
+        card.addView(sectionCompact("ラウンド情報"));
+
+        dateEdit = normalInput("日付 例: " + nowDate());
+        dateEdit.setText(nowDate());
+        courseEdit = normalInput("ゴルフ場名 例: 有馬CC");
+        teeEdit = normalInput("ティー 例: ブルーティー");
+        playerEdit = normalInput("プレイヤー名");
+        startTimeEdit = normalInput("スタート時間 例: 08:35 / OUT / IN");
+
+        if (landscape) {
+            card.addView(inputRow(dateEdit, courseEdit));
+            card.addView(inputRow(teeEdit, playerEdit));
+            card.addView(startTimeEdit);
+        } else {
+            card.addView(dateEdit);
+            card.addView(courseEdit);
+            card.addView(teeEdit);
+            card.addView(playerEdit);
+            card.addView(startTimeEdit);
+        }
+        return card;
     }
 
-    private TextView smallLabel(String value, boolean bold) {
-        TextView view = text(value, 14, 0xFF0F172A, bold);
-        view.setGravity(Gravity.CENTER);
-        view.setPadding(dp(4), dp(10), dp(4), dp(10));
-        return view;
+    private LinearLayout inputRow(View left, View right) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(left, weightedParams(1f, dp(4), dp(4)));
+        row.addView(right, weightedParams(1f, dp(4), dp(4)));
+        return row;
     }
 
-    private Spinner spinner(String[] values, int widthDp) {
+    private View createHoleList(boolean landscape) {
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+
+        if (landscape) {
+            for (int i = 0; i < HOLES; i += 2) {
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.addView(createHoleCard(i, true), weightedParams(1f, dp(4), dp(4)));
+                if (i + 1 < HOLES) {
+                    row.addView(createHoleCard(i + 1, true), weightedParams(1f, dp(4), dp(4)));
+                } else {
+                    Space spacer = new Space(this);
+                    row.addView(spacer, weightedParams(1f, dp(4), dp(4)));
+                }
+                container.addView(row);
+            }
+        } else {
+            for (int i = 0; i < HOLES; i++) {
+                View card = createHoleCard(i, false);
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                params.setMargins(0, dp(6), 0, dp(6));
+                container.addView(card, params);
+            }
+        }
+        return container;
+    }
+
+    private View createHoleCard(int index, boolean compact) {
+        LinearLayout card = card();
+        card.setPadding(dp(compact ? 10 : 12), dp(12), dp(compact ? 10 : 12), dp(12));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView hole = text((index + 1) + "H", 20, COLOR_TEXT, true);
+        header.addView(hole, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView tip = text(index < 9 ? "OUT" : "IN", 12, COLOR_PRIMARY, true);
+        tip.setGravity(Gravity.CENTER);
+        tip.setPadding(dp(10), dp(4), dp(10), dp(4));
+        tip.setBackground(rounded(COLOR_PRIMARY_SOFT, COLOR_PRIMARY_SOFT, 999));
+        header.addView(tip);
+        card.addView(header);
+
+        scorePickers[index] = picker(0, 20, 0, zeroDashValues(20), compact ? 76 : 86);
+        parPickers[index] = picker(3, 6, defaultPars[index], null, compact ? 62 : 68);
+        puttPickers[index] = picker(0, 6, 0, zeroDashValues(6), compact ? 62 : 68);
+        obPickers[index] = picker(0, 5, 0, zeroDashValues(5), compact ? 56 : 62);
+        penaltyPickers[index] = picker(0, 5, 0, zeroDashValues(5), compact ? 56 : 62);
+        fwSpinners[index] = spinner(fwOptions);
+        noteEdits[index] = normalInput("このホールのメモ");
+        noteEdits[index].setSingleLine(true);
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        topRow.addView(pickerBlock("SCORE", scorePickers[index]), weightedParams(1.2f, dp(2), dp(2)));
+        topRow.addView(pickerBlock("PAR", parPickers[index]), weightedParams(0.9f, dp(2), dp(2)));
+        topRow.addView(spinnerBlock("FW", fwSpinners[index]), weightedParams(1.3f, dp(2), dp(2)));
+        card.addView(topRow);
+
+        LinearLayout detailRow = new LinearLayout(this);
+        detailRow.setOrientation(LinearLayout.HORIZONTAL);
+        detailRow.setGravity(Gravity.CENTER_VERTICAL);
+        detailRow.addView(pickerBlock("Putt", puttPickers[index]), weightedParams(1f, dp(2), dp(2)));
+        detailRow.addView(pickerBlock("OB", obPickers[index]), weightedParams(1f, dp(2), dp(2)));
+        detailRow.addView(pickerBlock("Pen", penaltyPickers[index]), weightedParams(1f, dp(2), dp(2)));
+        card.addView(detailRow);
+
+        card.addView(noteEdits[index]);
+        return card;
+    }
+
+    private View createButtonArea(boolean landscape) {
+        LinearLayout area = new LinearLayout(this);
+        area.setOrientation(landscape ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        area.setPadding(0, dp(12), 0, dp(4));
+
+        Button saveButton = button("ラウンド保存", true);
+        saveButton.setOnClickListener(v -> saveRound());
+        Button copyButton = button("出力コピー", false);
+        copyButton.setOnClickListener(v -> copyExportText());
+        Button clearButton = button("入力リセット", false);
+        clearButton.setOnClickListener(v -> clearInputs());
+
+        area.addView(saveButton, weightedParams(1f, dp(3), dp(3)));
+        area.addView(copyButton, weightedParams(1f, dp(3), dp(3)));
+        area.addView(clearButton, weightedParams(1f, dp(3), dp(3)));
+        return area;
+    }
+
+    private LinearLayout pickerBlock(String label, NumberPicker picker) {
+        LinearLayout block = new LinearLayout(this);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setGravity(Gravity.CENTER_HORIZONTAL);
+        TextView text = text(label, 11, COLOR_MUTED, true);
+        text.setGravity(Gravity.CENTER);
+        block.addView(text);
+        block.addView(picker);
+        return block;
+    }
+
+    private LinearLayout spinnerBlock(String label, Spinner spinner) {
+        LinearLayout block = new LinearLayout(this);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setGravity(Gravity.CENTER_HORIZONTAL);
+        TextView text = text(label, 11, COLOR_MUTED, true);
+        text.setGravity(Gravity.CENTER);
+        block.addView(text);
+        block.addView(spinner, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        return block;
+    }
+
+    private Spinner spinner(String[] values) {
         Spinner spinner = new Spinner(this);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, values);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(adapter);
-        spinner.setMinimumWidth(dp(widthDp));
+        spinner.setMinimumWidth(dp(88));
         return spinner;
+    }
+
+    private NumberPicker picker(int min, int max, int value, String[] displayedValues, int widthDp) {
+        NumberPicker picker = new NumberPicker(this);
+        picker.setMinValue(min);
+        picker.setMaxValue(max);
+        if (displayedValues != null) picker.setDisplayedValues(displayedValues);
+        picker.setValue(value);
+        picker.setWrapSelectorWheel(false);
+        picker.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+        picker.setMinWidth(dp(widthDp));
+        picker.setMaxWidth(dp(widthDp));
+        picker.setOnLongPressUpdateInterval(120);
+        return picker;
+    }
+
+    private String[] zeroDashValues(int max) {
+        String[] values = new String[max + 1];
+        values[0] = "-";
+        for (int i = 1; i <= max; i++) values[i] = String.valueOf(i);
+        return values;
+    }
+
+    private LinearLayout card() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rounded(COLOR_CARD, COLOR_BORDER, 18));
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.setMargins(0, dp(6), 0, dp(6));
+        card.setLayoutParams(params);
+        return card;
+    }
+
+    private GradientDrawable rounded(int fillColor, int strokeColor, int radiusDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fillColor);
+        drawable.setCornerRadius(dp(radiusDp));
+        drawable.setStroke(dp(1), strokeColor);
+        return drawable;
+    }
+
+    private LinearLayout.LayoutParams weightedParams(float weight, int horizontalMargin, int verticalMargin) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
+        params.setMargins(horizontalMargin, verticalMargin, horizontalMargin, verticalMargin);
+        return params;
     }
 
     private EditText normalInput(String hint) {
@@ -247,18 +399,9 @@ public class MainActivity extends Activity {
         input.setTextSize(14);
         input.setSingleLine(true);
         input.setPadding(dp(10), dp(8), dp(10), dp(8));
-        input.setTextColor(0xFF0F172A);
+        input.setTextColor(COLOR_TEXT);
         input.setHintTextColor(0xFF94A3B8);
-        return input;
-    }
-
-    private EditText numberInput(String value, int widthDp) {
-        EditText input = normalInput("");
-        input.setInputType(InputType.TYPE_CLASS_NUMBER);
-        input.setGravity(Gravity.CENTER);
-        input.setText(value);
-        input.setMinWidth(dp(widthDp));
-        input.setSelectAllOnFocus(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
         return input;
     }
 
@@ -269,21 +412,24 @@ public class MainActivity extends Activity {
         button.setTextColor(0xFFFFFFFF);
         button.setAllCaps(false);
         button.setBackgroundResource(getResources().getIdentifier(primary ? "button_bg" : "secondary_button_bg", "drawable", getPackageName()));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, dp(5), 0, dp(5));
-        button.setLayoutParams(params);
         return button;
     }
 
     private TextView section(String value) {
-        TextView view = text(value, 17, 0xFF0F172A, true);
-        view.setPadding(0, dp(18), 0, dp(8));
+        TextView view = text(value, 17, COLOR_TEXT, true);
+        view.setPadding(dp(2), dp(18), dp(2), dp(8));
         return view;
     }
 
-    private TextView panel(String value) {
-        TextView view = text(value, 13, 0xFF1E293B, false);
-        view.setBackgroundColor(0xFFE2E8F0);
+    private TextView sectionCompact(String value) {
+        TextView view = text(value, 16, COLOR_TEXT, true);
+        view.setPadding(0, 0, 0, dp(8));
+        return view;
+    }
+
+    private TextView panel(String value, boolean important) {
+        TextView view = text(value, important ? 15 : 13, important ? COLOR_TEXT : 0xFF1E293B, important);
+        view.setBackground(rounded(important ? COLOR_PRIMARY_SOFT : 0xFFE2E8F0, important ? COLOR_PRIMARY_SOFT : COLOR_BORDER, 14));
         view.setPadding(dp(12), dp(12), dp(12), dp(12));
         return view;
     }
@@ -309,11 +455,12 @@ public class MainActivity extends Activity {
         playerEdit.addTextChangedListener(watcher);
         startTimeEdit.addTextChangedListener(watcher);
         for (int i = 0; i < HOLES; i++) {
-            parEdits[i].addTextChangedListener(watcher);
-            scoreEdits[i].addTextChangedListener(watcher);
-            obEdits[i].addTextChangedListener(watcher);
-            penaltyEdits[i].addTextChangedListener(watcher);
-            puttEdits[i].addTextChangedListener(watcher);
+            NumberPicker.OnValueChangeListener numberListener = (picker, oldVal, newVal) -> updateSummary();
+            parPickers[i].setOnValueChangedListener(numberListener);
+            scorePickers[i].setOnValueChangedListener(numberListener);
+            obPickers[i].setOnValueChangedListener(numberListener);
+            penaltyPickers[i].setOnValueChangedListener(numberListener);
+            puttPickers[i].setOnValueChangedListener(numberListener);
             noteEdits[i].addTextChangedListener(watcher);
             fwSpinners[i].setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                 @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) { updateSummary(); }
@@ -330,6 +477,8 @@ public class MainActivity extends Activity {
         int outPar = 0;
         int inPar = 0;
         int totalPar = 0;
+        int playedPar = 0;
+        int enteredHoles = 0;
         int putts = 0;
         int puttHoles = 0;
         int fwTargets = 0;
@@ -338,20 +487,22 @@ public class MainActivity extends Activity {
         int penaltyTotal = 0;
 
         for (int i = 0; i < HOLES; i++) {
-            int par = intFromString(parEdits[i].getText().toString());
-            int score = intFromString(scoreEdits[i].getText().toString());
-            int putt = intFromString(puttEdits[i].getText().toString());
-            int ob = intFromString(obEdits[i].getText().toString());
-            int penalty = intFromString(penaltyEdits[i].getText().toString());
-            if (i < 9) {
-                outPar += par;
-                outScore += score;
-            } else {
-                inPar += par;
-                inScore += score;
-            }
+            int par = parPickers[i].getValue();
+            int score = scorePickers[i].getValue();
+            int putt = puttPickers[i].getValue();
+            int ob = obPickers[i].getValue();
+            int penalty = penaltyPickers[i].getValue();
             totalPar += par;
-            totalScore += score;
+            if (i < 9) outPar += par;
+            else inPar += par;
+
+            if (score > 0) {
+                enteredHoles++;
+                totalScore += score;
+                playedPar += par;
+                if (i < 9) outScore += score;
+                else inScore += score;
+            }
             obTotal += ob;
             penaltyTotal += penalty;
             if (putt > 0) {
@@ -365,15 +516,18 @@ public class MainActivity extends Activity {
             }
         }
 
-        int diff = totalScore - totalPar;
+        String scoreDiff = "入力待ち";
+        if (enteredHoles > 0) {
+            int diff = totalScore - playedPar;
+            scoreDiff = diff == 0 ? "EVEN" : (diff > 0 ? "+" + diff : String.valueOf(diff));
+        }
         double fwRate = fwTargets > 0 ? (fwOk * 100.0 / fwTargets) : 0.0;
         double avgPutt = puttHoles > 0 ? (putts * 1.0 / puttHoles) : 0.0;
-        String scoreDiff = diff > 0 ? "+" + diff : String.valueOf(diff);
-        if (diff == 0) scoreDiff = "EVEN";
 
-        String summary = "OUT " + outScore + " / PAR " + outPar + "\n"
+        String summary = "入力ホール: " + enteredHoles + "/18\n"
+                + "OUT " + outScore + " / PAR " + outPar + "\n"
                 + "IN  " + inScore + " / PAR " + inPar + "\n"
-                + "TOTAL " + totalScore + " / PAR " + totalPar + " / " + scoreDiff + "\n"
+                + "TOTAL " + (enteredHoles > 0 ? String.valueOf(totalScore) : "-") + " / PAR " + totalPar + " / " + scoreDiff + "\n"
                 + "FWキープ: " + fwOk + "/" + fwTargets + "（" + String.format(Locale.US, "%.1f", fwRate) + "%）\n"
                 + "パット: " + putts + " / 平均 " + String.format(Locale.US, "%.2f", avgPutt) + "\n"
                 + "OB: " + obTotal + " / Penalty: " + penaltyTotal;
@@ -391,12 +545,12 @@ public class MainActivity extends Activity {
         builder.append("スタート: ").append(value(startTimeEdit)).append("\n");
         builder.append("====================\n");
         for (int i = 0; i < HOLES; i++) {
-            builder.append(i + 1).append("H / PAR:").append(value(parEdits[i]))
-                    .append(" / SCORE:").append(value(scoreEdits[i]))
+            builder.append(i + 1).append("H / PAR:").append(parPickers[i].getValue())
+                    .append(" / SCORE:").append(formatPickerValue(scorePickers[i].getValue()))
                     .append(" / FW:").append(fwSpinners[i].getSelectedItem())
-                    .append(" / OB:").append(value(obEdits[i]))
-                    .append(" / Pen:").append(value(penaltyEdits[i]))
-                    .append(" / Putt:").append(value(puttEdits[i]));
+                    .append(" / OB:").append(formatPickerValue(obPickers[i].getValue()))
+                    .append(" / Pen:").append(formatPickerValue(penaltyPickers[i].getValue()))
+                    .append(" / Putt:").append(formatPickerValue(puttPickers[i].getValue()));
             String note = value(noteEdits[i]);
             if (!TextUtils.isEmpty(note)) builder.append(" / メモ:").append(note);
             builder.append("\n");
@@ -407,12 +561,16 @@ public class MainActivity extends Activity {
         return builder.toString();
     }
 
+    private String formatPickerValue(int value) {
+        return value == 0 ? "-" : String.valueOf(value);
+    }
+
     private void saveRound() {
         updateSummary();
         SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
         String old = prefs.getString(KEY_ROUNDS, "");
         String next = nowFull() + "\n" + exportText.getText().toString() + "\n\n" + old;
-        if (next.length() > 20000) next = next.substring(0, 20000);
+        if (next.length() > 25000) next = next.substring(0, 25000);
         prefs.edit().putString(KEY_ROUNDS, next).apply();
         loadPastRounds();
         saveDraft(false);
@@ -442,12 +600,12 @@ public class MainActivity extends Activity {
         playerEdit.setText("");
         startTimeEdit.setText("");
         for (int i = 0; i < HOLES; i++) {
-            parEdits[i].setText(String.valueOf(defaultPars[i]));
-            scoreEdits[i].setText("");
+            parPickers[i].setValue(defaultPars[i]);
+            scorePickers[i].setValue(0);
             fwSpinners[i].setSelection(0);
-            obEdits[i].setText("");
-            penaltyEdits[i].setText("");
-            puttEdits[i].setText("");
+            obPickers[i].setValue(0);
+            penaltyPickers[i].setValue(0);
+            puttPickers[i].setValue(0);
             noteEdits[i].setText("");
         }
         restoring = false;
@@ -486,12 +644,12 @@ public class MainActivity extends Activity {
                 if (lineIndex >= lines.length) break;
                 String[] parts = lines[lineIndex].split("\t", -1);
                 if (parts.length >= 7) {
-                    parEdits[i].setText(unescape(parts[0]));
-                    scoreEdits[i].setText(unescape(parts[1]));
+                    parPickers[i].setValue(bound(parseInt(unescape(parts[0]), defaultPars[i]), 3, 6));
+                    scorePickers[i].setValue(bound(parseInt(unescape(parts[1]), 0), 0, 20));
                     setSpinnerByValue(fwSpinners[i], unescape(parts[2]));
-                    obEdits[i].setText(unescape(parts[3]));
-                    penaltyEdits[i].setText(unescape(parts[4]));
-                    puttEdits[i].setText(unescape(parts[5]));
+                    obPickers[i].setValue(bound(parseInt(unescape(parts[3]), 0), 0, 5));
+                    penaltyPickers[i].setValue(bound(parseInt(unescape(parts[4]), 0), 0, 5));
+                    puttPickers[i].setValue(bound(parseInt(unescape(parts[5]), 0), 0, 6));
                     noteEdits[i].setText(unescape(parts[6]));
                 }
             }
@@ -507,12 +665,12 @@ public class MainActivity extends Activity {
         lines.add(escape(value(playerEdit)));
         lines.add(escape(value(startTimeEdit)));
         for (int i = 0; i < HOLES; i++) {
-            lines.add(escape(value(parEdits[i])) + "\t"
-                    + escape(value(scoreEdits[i])) + "\t"
+            lines.add(parPickers[i].getValue() + "\t"
+                    + scorePickers[i].getValue() + "\t"
                     + escape(String.valueOf(fwSpinners[i].getSelectedItem())) + "\t"
-                    + escape(value(obEdits[i])) + "\t"
-                    + escape(value(penaltyEdits[i])) + "\t"
-                    + escape(value(puttEdits[i])) + "\t"
+                    + obPickers[i].getValue() + "\t"
+                    + penaltyPickers[i].getValue() + "\t"
+                    + puttPickers[i].getValue() + "\t"
                     + escape(value(noteEdits[i])));
         }
         return TextUtils.join("\n", lines);
@@ -528,14 +686,18 @@ public class MainActivity extends Activity {
         spinner.setSelection(0);
     }
 
-    private int intFromString(String text) {
+    private int parseInt(String text, int fallback) {
         try {
             String clean = text == null ? "" : text.trim();
-            if (clean.isEmpty()) return 0;
+            if (clean.isEmpty() || "-".equals(clean)) return fallback;
             return Integer.parseInt(clean);
         } catch (Exception ignored) {
-            return 0;
+            return fallback;
         }
+    }
+
+    private int bound(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private String value(EditText editText) {
