@@ -1,7 +1,10 @@
 package jp.co.nkts.scoremanager;
 
-public class Space extends android.widget.Space {
-    public Space(android.content.Context context) {
+import android.content.Context;
+import android.view.View;
+
+public class Space extends View {
+    public Space(Context context) {
         super(context);
     }
 }
