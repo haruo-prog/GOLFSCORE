@@ -1,31 +1,68 @@
-# GOLFSCORE
+# Golf Scorecard Offline
 
-Android向けのゴルフスコア管理アプリです。
+Android向けのオフライン対応ゴルフスコアカードアプリです。
 
 ## Store Concept
 
-**The fastest golf score app in the world. Works offline. No ads. No subscription. Just $1.**
+**Golf Scorecard Offline**
+
+**No ads. No login. Works offline. Simple golf scorekeeping.**
+
+## Search Positioning
+
+検索ヒットを狙う主軸は以下です。
+
+- golf scorecard
+- golf score
+- golf score app
+- golf score tracker
+- offline golf scorecard
+- simple golf scorecard
+- ゴルフ スコア
+- ゴルフ スコアカード
+- ゴルフ スコア 管理
 
 ## Version
 
-- App version: 1.14.0
-- V2.6 language expansion
-- versionCode: 26
+- App version: 1.15.0
+- V2.7 store positioning and app label update
+- versionCode: 27
 - compileSdk: 36
 - targetSdk: 36
 - minSdk: 26
 
-## V2.6変更点
+## V2.7変更点
 
-- 言語を8言語に拡張
-- スペイン語を追加
-- フランス語を追加
-- 繁体字中国語を追加
-- 既存の中国語表示を簡体字として整理
-- 最下部の言語ボタンを `JP / EN / ES / FR / KO / 简 / 繁 / DE` に変更
-- 言語ボタンは固定幅・固定高・折り返しなしを維持
+- アプリ表示名を **Golf Scorecard Offline** に変更
+- Google Play向けの検索戦略をREADMEに反映
+- ストアコンセプトを `No ads / No login / Works offline / Simple golf scorekeeping` に統一
+- 8言語対応は継続
 - 入力画面の保存遅延・軽量更新は継続
 - バックアップ保存 / バックアップから復元は継続
+
+## Store Copy Draft
+
+### Short Description EN
+
+No ads. No login. Works offline. A simple golf scorecard for fast scorekeeping.
+
+### Short Description JP
+
+広告なし・ログイン不要・オフライン対応。シンプルに使えるゴルフスコアカード。
+
+### Main Message
+
+Too many golf apps are complicated. This one is simple.
+
+多機能すぎるゴルフアプリが苦手な人へ。スコア管理だけ、すぐ使える。
+
+## Screenshot Copy
+
+1. Simple Golf Scorecard
+2. Works Offline Anywhere
+3. No Ads. No Login.
+4. Fast Score Input
+5. One-Time Purchase
 
 ## 対応言語
 
