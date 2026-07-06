@@ -355,8 +355,8 @@ public class MainActivity extends Activity {
         picker.setValue(value);
         picker.setWrapSelectorWheel(false);
         picker.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-        picker.setMinWidth(dp(widthDp));
-        picker.setMaxWidth(dp(widthDp));
+        picker.setMinimumWidth(dp(widthDp));
+        picker.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), LinearLayout.LayoutParams.WRAP_CONTENT));
         picker.setOnLongPressUpdateInterval(120);
         return picker;
     }
