@@ -5,9 +5,13 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.pdf.PdfDocument;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
@@ -17,7 +21,6 @@ import android.text.TextWatcher;
 import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -29,6 +32,8 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -41,8 +46,8 @@ public class MainActivity extends Activity {
     private static final int SCORE_MAX = 15;
     private static final long AUTO_SAVE_INTERVAL_MS = 1000L;
     private static final String PREF_NAME = "nk_score_manager_beta";
-    private static final String KEY_PREFIX = "v15_";
-    private static final String KEY_HISTORY = "v15_history";
+    private static final String KEY_PREFIX = "v16_";
+    private static final String KEY_HISTORY = "v16_history";
 
     private static final int COLOR_BG = 0xFFF8FAFC;
     private static final int COLOR_CARD = 0xFFFFFFFF;
@@ -53,8 +58,8 @@ public class MainActivity extends Activity {
     private static final int COLOR_MUTED = 0xFF64748B;
     private static final int COLOR_BORDER = 0xFFE2E8F0;
     private static final int COLOR_PANEL = 0xFFEFF6FF;
-    private static final int COLOR_DANGER = 0xFFB91C1C;
-    private static final int COLOR_WARNING = 0xFF92400E;
+    private static final int COLOR_WARN_SOFT = 0xFFFEF3C7;
+    private static final int COLOR_DANGER_SOFT = 0xFFFEE2E2;
 
     private final int[] defaultPars = {4, 4, 3, 5, 4, 4, 5, 3, 4, 4, 5, 4, 3, 4, 4, 5, 3, 4};
     private final String[] playerCountOptions = {"1名", "2名", "3名", "4名"};
@@ -64,7 +69,6 @@ public class MainActivity extends Activity {
     private LinearLayout root;
     private ScrollView scrollView;
     private TextView saveStatusText;
-    private TextView selectedHistoryDetailText;
 
     private String dateText = "";
     private String courseText = "";
@@ -74,6 +78,7 @@ public class MainActivity extends Activity {
     private int currentHole = 0;
     private boolean registrationMode = false;
     private String selectedHistoryDetail = "";
+    private String selectedScoreCard = "";
 
     private final int[] pars = new int[HOLES];
     private final String[] playerNames = {"Player 1", "Player 2", "Player 3", "Player 4"};
@@ -167,7 +172,7 @@ public class MainActivity extends Activity {
         TextView title = text("NK Score Manager", 27, COLOR_TEXT, true);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         card.addView(title);
-        TextView sub = text("履歴・平均・簡単登録 V1.5", 14, COLOR_MUTED, false);
+        TextView sub = text("候補ボタン入力・スコアカードPDF V1.6", 14, COLOR_MUTED, false);
         sub.setGravity(Gravity.CENTER_HORIZONTAL);
         sub.setPadding(0, dp(4), 0, 0);
         card.addView(sub);
@@ -177,7 +182,7 @@ public class MainActivity extends Activity {
     private View createHomeActionCard() {
         LinearLayout card = card();
         card.addView(sectionCompact("フロントページ"));
-        TextView help = text("カート移動中でも押しやすい登録画面に切り替えます。登録中は全入力が終わるまで登録画面を維持します。", 13, COLOR_MUTED, false);
+        TextView help = text("ラウンド中は1Hずつ、大きな候補ボタンだけで入力します。入力中は完了まで登録画面を維持します。", 13, COLOR_MUTED, false);
         help.setPadding(0, 0, 0, dp(8));
         card.addView(help);
 
@@ -193,8 +198,7 @@ public class MainActivity extends Activity {
 
         Button start = button("新規スコア登録", true);
         start.setOnClickListener(v -> {
-            resetRound(false);
-            registrationMode = true;
+            resetRound(true);
             renderRegistrationScreen();
             saveDraft(false);
         });
@@ -204,11 +208,9 @@ public class MainActivity extends Activity {
 
     private View createStatsCard() {
         LinearLayout card = card();
-        card.addView(sectionCompact("平均スコア"));
+        card.addView(sectionCompact("平均・傾向"));
         ArrayList<RoundRecord> records = loadHistoryRecords();
-        TextView stats = text(buildStatsText(records), 14, COLOR_TEXT, true);
-        stats.setBackground(rounded(COLOR_PRIMARY_SOFT, COLOR_PRIMARY_SOFT, 14));
-        stats.setPadding(dp(12), dp(12), dp(12), dp(12));
+        TextView stats = panel(buildStatsText(records), true);
         card.addView(stats);
         return card;
     }
@@ -224,25 +226,33 @@ public class MainActivity extends Activity {
         } else {
             for (int i = 0; i < records.size() && i < 30; i++) {
                 RoundRecord record = records.get(i);
-                LinearLayout row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.VERTICAL);
-                row.setBackground(rounded(0xFFF8FAFC, COLOR_BORDER, 14));
-                row.setPadding(dp(10), dp(10), dp(10), dp(10));
-                LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                rp.setMargins(0, dp(5), 0, dp(5));
-                TextView summary = text(record.date + "  " + record.course + "\nPlayer1 TOTAL: " + record.total + " / Putt: " + record.putts + " / FW: " + record.fwKeep + "/" + record.fwTarget, 13, COLOR_TEXT, true);
+                LinearLayout row = cardLite();
+                TextView summary = text(record.date + "  " + record.course + "\nPlayer1 TOTAL: " + record.total + " / PAT: " + record.putts + " / FW: " + record.fwKeep + "/" + record.fwTarget, 13, COLOR_TEXT, true);
                 row.addView(summary);
-                Button detail = button("履歴を見る", false);
+                LinearLayout actions = new LinearLayout(this);
+                actions.setOrientation(LinearLayout.HORIZONTAL);
+                Button detail = button("詳細", false);
                 detail.setOnClickListener(v -> {
                     selectedHistoryDetail = record.detail;
+                    selectedScoreCard = record.scoreCard;
                     renderHomeScreen();
                 });
-                row.addView(detail, fullWidthButtonParams());
-                card.addView(row, rp);
+                Button pdf = button("PDF", true);
+                pdf.setOnClickListener(v -> exportPdf(record.scoreCard, record.detail));
+                actions.addView(detail, weightedParams(1f, dp(3), dp(3)));
+                actions.addView(pdf, weightedParams(1f, dp(3), dp(3)));
+                row.addView(actions);
+                card.addView(row);
             }
         }
-        selectedHistoryDetailText = panel(TextUtils.isEmpty(selectedHistoryDetail) ? "履歴を選択すると詳細が表示されます。" : selectedHistoryDetail, false);
-        card.addView(selectedHistoryDetailText);
+
+        if (!TextUtils.isEmpty(selectedScoreCard) || !TextUtils.isEmpty(selectedHistoryDetail)) {
+            card.addView(sectionCompact("選択中のスコアカード"));
+            card.addView(panel(TextUtils.isEmpty(selectedScoreCard) ? selectedHistoryDetail : selectedScoreCard, false));
+            Button pdf = button("選択中の履歴をPDF出力", true);
+            pdf.setOnClickListener(v -> exportPdf(selectedScoreCard, selectedHistoryDetail));
+            card.addView(pdf, fullWidthButtonParams());
+        }
         return card;
     }
 
@@ -250,6 +260,7 @@ public class MainActivity extends Activity {
         registrationMode = true;
         root.removeAllViews();
         root.addView(createRegistrationHeaderCard());
+        root.addView(createProgressCard());
         root.addView(createRoundInfoCard());
         root.addView(createPlayerSetupCard());
         root.addView(createHoleCard());
@@ -267,11 +278,49 @@ public class MainActivity extends Activity {
         TextView title = text("スコア登録モード", 22, COLOR_TEXT, true);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         card.addView(title);
-        TextView sub = text("1Hずつ大きいボタンで入力。全ホール登録完了までこの画面を維持します。", 13, COLOR_MUTED, false);
+        TextView sub = text("候補ボタンを押すだけ。カート移動中でも片手で入力しやすい画面です。", 13, COLOR_MUTED, false);
         sub.setGravity(Gravity.CENTER_HORIZONTAL);
         sub.setPadding(0, dp(6), 0, 0);
         card.addView(sub);
         return card;
+    }
+
+    private View createProgressCard() {
+        LinearLayout card = card();
+        card.addView(sectionCompact("入力進捗"));
+        TextView text = panel("現在 " + (currentHole + 1) + "H / 18H\nPlayer1: " + countEnteredForPlayer(0) + "/18  /  全体未入力: " + countMissingScores(), true);
+        card.addView(text);
+        card.addView(holeJumpGrid());
+        return card;
+    }
+
+    private View holeJumpGrid() {
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        for (int row = 0; row < 3; row++) {
+            LinearLayout line = new LinearLayout(this);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            for (int col = 0; col < 6; col++) {
+                int hole = row * 6 + col;
+                Button b = new Button(this);
+                b.setText(String.valueOf(hole + 1));
+                b.setTextSize(12);
+                b.setAllCaps(false);
+                b.setTextColor(hole == currentHole ? 0xFFFFFFFF : COLOR_TEXT);
+                int bg = hole == currentHole ? COLOR_PRIMARY : (isHoleComplete(hole) ? COLOR_PRIMARY_SOFT : COLOR_DANGER_SOFT);
+                b.setBackground(rounded(bg, hole == currentHole ? COLOR_PRIMARY_DARK : COLOR_BORDER, 12));
+                b.setMinHeight(dp(42));
+                final int target = hole;
+                b.setOnClickListener(v -> {
+                    currentHole = target;
+                    saveDraft(false);
+                    renderRegistrationScreen();
+                });
+                line.addView(b, weightedParams(1f, dp(2), dp(2)));
+            }
+            grid.addView(line);
+        }
+        return grid;
     }
 
     private View createRoundInfoCard() {
@@ -332,13 +381,13 @@ public class MainActivity extends Activity {
 
     private View createHoleCard() {
         LinearLayout card = card();
-        TextView title = text((currentHole + 1) + "H", 28, COLOR_TEXT, true);
+        TextView title = text((currentHole + 1) + "H", 30, COLOR_TEXT, true);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         card.addView(title);
-        TextView progress = text(buildProgressText(), 13, COLOR_MUTED, true);
-        progress.setGravity(Gravity.CENTER_HORIZONTAL);
-        progress.setPadding(0, dp(4), 0, dp(8));
-        card.addView(progress);
+        TextView sub = text((currentHole < 9 ? "OUT" : "IN") + " / PAR " + pars[currentHole], 14, COLOR_MUTED, true);
+        sub.setGravity(Gravity.CENTER_HORIZONTAL);
+        sub.setPadding(0, dp(4), 0, dp(8));
+        card.addView(sub);
 
         card.addView(createParControl());
         card.addView(createPlayer1Input());
@@ -349,45 +398,148 @@ public class MainActivity extends Activity {
 
     private View createParControl() {
         LinearLayout wrap = cardLite();
-        wrap.addView(text("PAR", 13, COLOR_MUTED, true));
-        wrap.addView(stepper("PAR", pars[currentHole] == 0 ? "-" : String.valueOf(pars[currentHole]), () -> {
-            pars[currentHole] = Math.max(3, pars[currentHole] - 1);
-            saveDraft(false);
-            renderRegistrationScreen();
-        }, () -> {
-            pars[currentHole] = Math.min(6, pars[currentHole] + 1);
-            saveDraft(false);
-            renderRegistrationScreen();
-        }, null));
+        wrap.addView(text("PAR設定", 13, COLOR_MUTED, true));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int par = 3; par <= 6; par++) {
+            final int value = par;
+            Button b = choiceButton(String.valueOf(par), pars[currentHole] == par);
+            b.setOnClickListener(v -> {
+                pars[currentHole] = value;
+                saveDraft(false);
+                renderRegistrationScreen();
+            });
+            row.addView(b, weightedParams(1f, dp(3), dp(3)));
+        }
+        wrap.addView(row);
         return wrap;
     }
 
     private View createPlayer1Input() {
         LinearLayout wrap = cardLite();
         wrap.addView(text(displayPlayerName(0) + "（詳細入力）", 18, COLOR_TEXT, true));
-        wrap.addView(stepper("SCORE", formatValue(scores[0][currentHole]), () -> changeScore(0, -1), () -> changeScore(0, 1), () -> clearScore(0)));
-        wrap.addView(stepper("PAT", formatValue(player1Putts[currentHole]), () -> changePutt(-1), () -> changePutt(1), () -> clearPutt()));
-        wrap.addView(choiceGroup("ティーショット結果", teeResultLabels, teeResults[currentHole], index -> {
-            teeResults[currentHole] = index;
-            saveDraft(false);
-            renderRegistrationScreen();
-        }));
-        wrap.addView(choiceGroup("狙いに対しての方向性", directionLabels, directions[currentHole], index -> {
-            directions[currentHole] = index;
-            saveDraft(false);
-            renderRegistrationScreen();
-        }));
+        wrap.addView(scoreCandidateGrid(0));
+        wrap.addView(puttGrid());
+        wrap.addView(teeCombinedGrid());
         return wrap;
     }
 
     private View createOtherPlayerInput(int player) {
         LinearLayout wrap = cardLite();
         wrap.addView(text(displayPlayerName(player), 18, COLOR_TEXT, true));
-        TextView note = text("PAT数・ティーショット分析は不要。スコアだけ入力します。", 12, COLOR_MUTED, false);
+        TextView note = text("同伴者はスコアだけ入力します。", 12, COLOR_MUTED, false);
         note.setPadding(0, dp(2), 0, dp(4));
         wrap.addView(note);
-        wrap.addView(stepper("SCORE", formatValue(scores[player][currentHole]), () -> changeScore(player, -1), () -> changeScore(player, 1), () -> clearScore(player)));
+        wrap.addView(scoreCandidateGrid(player));
         return wrap;
+    }
+
+    private View scoreCandidateGrid(int player) {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        group.setPadding(0, dp(8), 0, dp(8));
+        TextView label = text("SCORE 1〜15", 12, COLOR_MUTED, true);
+        label.setGravity(Gravity.CENTER_HORIZONTAL);
+        group.addView(label);
+        for (int row = 0; row < 3; row++) {
+            LinearLayout line = new LinearLayout(this);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            for (int col = 0; col < 5; col++) {
+                int value = row * 5 + col + 1;
+                Button b = choiceButton(String.valueOf(value), scores[player][currentHole] == value);
+                b.setMinHeight(dp(54));
+                final int score = value;
+                b.setOnClickListener(v -> {
+                    scores[player][currentHole] = score;
+                    saveDraft(false);
+                    renderRegistrationScreen();
+                });
+                line.addView(b, weightedParams(1f, dp(2), dp(2)));
+            }
+            group.addView(line);
+        }
+        Button clear = button("スコア未入力に戻す", false);
+        clear.setOnClickListener(v -> {
+            scores[player][currentHole] = 0;
+            saveDraft(false);
+            renderRegistrationScreen();
+        });
+        group.addView(clear, fullWidthButtonParams());
+        return group;
+    }
+
+    private View puttGrid() {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        group.setPadding(0, dp(8), 0, dp(8));
+        TextView label = text("PAT", 12, COLOR_MUTED, true);
+        label.setGravity(Gravity.CENTER_HORIZONTAL);
+        group.addView(label);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int value = 1; value <= 6; value++) {
+            final int putt = value;
+            Button b = choiceButton(String.valueOf(value), player1Putts[currentHole] == value);
+            b.setOnClickListener(v -> {
+                player1Putts[currentHole] = putt;
+                saveDraft(false);
+                renderRegistrationScreen();
+            });
+            row.addView(b, weightedParams(1f, dp(2), dp(2)));
+        }
+        group.addView(row);
+        Button clear = button("PAT未入力に戻す", false);
+        clear.setOnClickListener(v -> {
+            player1Putts[currentHole] = 0;
+            saveDraft(false);
+            renderRegistrationScreen();
+        });
+        group.addView(clear, fullWidthButtonParams());
+        return group;
+    }
+
+    private View teeCombinedGrid() {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        group.setPadding(0, dp(8), 0, dp(8));
+        TextView label = text("ティーショット（結果＋方向性を1タップ）", 12, COLOR_MUTED, true);
+        label.setGravity(Gravity.CENTER_HORIZONTAL);
+        group.addView(label);
+        addTeeRow(group, new TeeChoice[]{
+                new TeeChoice("FW左", 1, 1), new TeeChoice("FW中", 1, 2), new TeeChoice("FW右", 1, 3)
+        });
+        addTeeRow(group, new TeeChoice[]{
+                new TeeChoice("ラフ左", 2, 1), new TeeChoice("ラフ中", 2, 2), new TeeChoice("ラフ右", 2, 3)
+        });
+        addTeeRow(group, new TeeChoice[]{
+                new TeeChoice("OB左", 3, 1), new TeeChoice("OB中", 3, 2), new TeeChoice("OB右", 3, 3)
+        });
+        Button clear = button("ティーショット未選択に戻す", false);
+        clear.setOnClickListener(v -> {
+            teeResults[currentHole] = 0;
+            directions[currentHole] = 0;
+            saveDraft(false);
+            renderRegistrationScreen();
+        });
+        group.addView(clear, fullWidthButtonParams());
+        return group;
+    }
+
+    private void addTeeRow(LinearLayout group, TeeChoice[] choices) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (TeeChoice choice : choices) {
+            boolean selected = teeResults[currentHole] == choice.result && directions[currentHole] == choice.direction;
+            Button b = choiceButton(choice.label, selected);
+            b.setOnClickListener(v -> {
+                teeResults[currentHole] = choice.result;
+                directions[currentHole] = choice.direction;
+                saveDraft(false);
+                renderRegistrationScreen();
+            });
+            row.addView(b, weightedParams(1f, dp(3), dp(3)));
+        }
+        group.addView(row);
     }
 
     private View createHoleNavButtons() {
@@ -407,8 +559,9 @@ public class MainActivity extends Activity {
     private View createSummaryCard() {
         LinearLayout card = card();
         card.addView(sectionCompact("現在の集計"));
-        TextView summary = panel(buildLiveSummary(), true);
-        card.addView(summary);
+        card.addView(panel(buildLiveSummary(), true));
+        card.addView(sectionCompact("スコアカード プレビュー"));
+        card.addView(panel(buildScoreCardText(false), false));
         return card;
     }
 
@@ -419,100 +572,19 @@ public class MainActivity extends Activity {
         save.setOnClickListener(v -> saveDraft(true));
         area.addView(save, fullWidthButtonParams());
 
+        Button pdfPreview = button("現在のスコアカードをPDF出力", false);
+        pdfPreview.setOnClickListener(v -> exportPdf(buildScoreCardText(true), buildExportText()));
+        area.addView(pdfPreview, fullWidthButtonParams());
+
         Button finish = button("全入力完了 → 履歴に保存", true);
         finish.setOnClickListener(v -> finishRound());
         area.addView(finish, fullWidthButtonParams());
 
-        TextView hint = text("全プレイヤーの18ホールスコアが入るまで、登録画面は閉じません。", 12, COLOR_MUTED, false);
+        TextView hint = text("未入力スコアがある場合は、登録画面を閉じずに入力を続けます。", 12, COLOR_MUTED, false);
         hint.setGravity(Gravity.CENTER_HORIZONTAL);
         hint.setPadding(0, dp(4), 0, dp(8));
         area.addView(hint);
         return area;
-    }
-
-    private LinearLayout stepper(String label, String value, Runnable minus, Runnable plus, Runnable clear) {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(0, dp(6), 0, dp(8));
-        TextView labelView = text(label, 12, COLOR_MUTED, true);
-        labelView.setGravity(Gravity.CENTER_HORIZONTAL);
-        box.addView(labelView);
-
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        Button minusButton = bigButton("−", false);
-        minusButton.setOnClickListener(v -> minus.run());
-        TextView valueView = text(value, 34, COLOR_TEXT, true);
-        valueView.setGravity(Gravity.CENTER);
-        valueView.setBackground(rounded(0xFFFFFFFF, COLOR_BORDER, 16));
-        Button plusButton = bigButton("＋", true);
-        plusButton.setOnClickListener(v -> plus.run());
-        row.addView(minusButton, weightedParams(1f, dp(3), dp(3)));
-        row.addView(valueView, weightedParams(1.2f, dp(3), dp(3)));
-        row.addView(plusButton, weightedParams(1f, dp(3), dp(3)));
-        box.addView(row);
-
-        if (clear != null) {
-            Button clearButton = button("未入力に戻す", false);
-            clearButton.setOnClickListener(v -> clear.run());
-            box.addView(clearButton, fullWidthButtonParams());
-        }
-        return box;
-    }
-
-    private LinearLayout choiceGroup(String title, String[] labels, int selected, ChoiceSink sink) {
-        LinearLayout group = new LinearLayout(this);
-        group.setOrientation(LinearLayout.VERTICAL);
-        group.setPadding(0, dp(8), 0, dp(8));
-        TextView titleView = text(title, 12, COLOR_MUTED, true);
-        titleView.setGravity(Gravity.CENTER_HORIZONTAL);
-        group.addView(titleView);
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        for (int i = 1; i < labels.length; i++) {
-            final int index = i;
-            Button b = choiceButton(labels[i], selected == i);
-            b.setOnClickListener(v -> sink.set(index));
-            row.addView(b, weightedParams(1f, dp(3), dp(3)));
-        }
-        group.addView(row);
-        if (selected > 0) {
-            Button clear = button("選択解除", false);
-            clear.setOnClickListener(v -> sink.set(0));
-            group.addView(clear, fullWidthButtonParams());
-        }
-        return group;
-    }
-
-    private void changeScore(int player, int delta) {
-        int current = scores[player][currentHole];
-        if (current == 0 && delta > 0) current = 1;
-        else current = bound(current + delta, 0, SCORE_MAX);
-        scores[player][currentHole] = current;
-        saveDraft(false);
-        renderRegistrationScreen();
-    }
-
-    private void clearScore(int player) {
-        scores[player][currentHole] = 0;
-        saveDraft(false);
-        renderRegistrationScreen();
-    }
-
-    private void changePutt(int delta) {
-        int current = player1Putts[currentHole];
-        if (current == 0 && delta > 0) current = 1;
-        else current = bound(current + delta, 0, 8);
-        player1Putts[currentHole] = current;
-        saveDraft(false);
-        renderRegistrationScreen();
-    }
-
-    private void clearPutt() {
-        player1Putts[currentHole] = 0;
-        saveDraft(false);
-        renderRegistrationScreen();
     }
 
     private void moveHole(int delta) {
@@ -529,22 +601,19 @@ public class MainActivity extends Activity {
             renderRegistrationScreen();
             return;
         }
+        String scoreCard = buildScoreCardText(true);
         String export = buildExportText();
-        RoundRecord record = buildRoundRecord(export);
+        RoundRecord record = buildRoundRecord(export, scoreCard);
         ArrayList<RoundRecord> records = loadHistoryRecords();
         records.add(0, record);
         saveHistoryRecords(records);
         Toast.makeText(this, "履歴に保存しました。", Toast.LENGTH_SHORT).show();
-        resetRound(false);
         selectedHistoryDetail = export;
+        selectedScoreCard = scoreCard;
+        resetRound(false);
         registrationMode = false;
         saveDraft(false);
         renderHomeScreen();
-    }
-
-    private String buildProgressText() {
-        int p1Done = countEnteredForPlayer(0);
-        return "進捗 Player1: " + p1Done + "/18  /  全体未入力: " + countMissingScores();
     }
 
     private String buildLiveSummary() {
@@ -575,9 +644,52 @@ public class MainActivity extends Activity {
         return builder.toString().trim();
     }
 
+    private String buildScoreCardText(boolean full) {
+        StringBuilder b = new StringBuilder();
+        b.append("SCORE CARD\n");
+        b.append(dateText).append("  ").append(TextUtils.isEmpty(courseText) ? "未入力" : courseText).append("\n");
+        b.append("TEE: ").append(teeText).append("  START: ").append(startTimeText).append("\n\n");
+        b.append("HOLE  1  2  3  4  5  6  7  8  9 |OUT|10 11 12 13 14 15 16 17 18 |IN |TOTAL\n");
+        b.append("PAR  ").append(rowValues(pars, -1)).append("\n");
+        for (int p = 0; p < activePlayers; p++) {
+            b.append(shortName(displayPlayerName(p))).append("   ").append(rowValues(scores[p], p)).append("\n");
+        }
+        b.append("\n").append(buildLiveSummary()).append("\n");
+        if (full) {
+            b.append("\nPlayer1 Tee Detail\n");
+            for (int h = 0; h < HOLES; h++) {
+                b.append(h + 1).append("H: ")
+                        .append(teeResultLabels[bound(teeResults[h], 0, teeResultLabels.length - 1)])
+                        .append(" / ")
+                        .append(directionLabels[bound(directions[h], 0, directionLabels.length - 1)])
+                        .append(" / PAT ").append(formatValue(player1Putts[h]))
+                        .append("\n");
+            }
+        }
+        return b.toString();
+    }
+
+    private String rowValues(int[] values, int player) {
+        StringBuilder b = new StringBuilder();
+        int out = 0;
+        int in = 0;
+        int total = 0;
+        for (int h = 0; h < HOLES; h++) {
+            int value = values[h];
+            if (player >= 0 && value == 0) b.append(" - ");
+            else b.append(pad2(value));
+            if (h < 9) out += value;
+            else in += value;
+            total += value;
+            if (h == 8) b.append("|").append(pad2(out)).append("|");
+        }
+        b.append("|").append(pad2(in)).append("|").append(pad3(total));
+        return b.toString();
+    }
+
     private String buildExportText() {
         StringBuilder builder = new StringBuilder();
-        builder.append("NK Score Export V1.5\n");
+        builder.append("NK Score Export V1.6\n");
         builder.append("日付: ").append(dateText).append("\n");
         builder.append("コース: ").append(courseText).append("\n");
         builder.append("ティー: ").append(teeText).append("\n");
@@ -587,8 +699,7 @@ public class MainActivity extends Activity {
         for (int h = 0; h < HOLES; h++) {
             builder.append(h + 1).append("H / PAR:").append(pars[h]).append("\n");
             for (int p = 0; p < activePlayers; p++) {
-                builder.append("  ").append(displayPlayerName(p))
-                        .append(" / SCORE:").append(formatValue(scores[p][h]));
+                builder.append("  ").append(displayPlayerName(p)).append(" / SCORE:").append(formatValue(scores[p][h]));
                 if (p == 0) {
                     builder.append(" / PAT:").append(formatValue(player1Putts[h]))
                             .append(" / Tee:").append(teeResultLabels[teeResults[h]])
@@ -603,7 +714,7 @@ public class MainActivity extends Activity {
         return builder.toString();
     }
 
-    private RoundRecord buildRoundRecord(String export) {
+    private RoundRecord buildRoundRecord(String export, String scoreCard) {
         RoundRecord record = new RoundRecord();
         record.timestamp = parseDateMillis(dateText);
         record.date = dateText;
@@ -614,14 +725,85 @@ public class MainActivity extends Activity {
         record.fwKeep = countTeeResult(1);
         record.fwTarget = countTeeTargets();
         record.detail = export;
+        record.scoreCard = scoreCard;
         return record;
+    }
+
+    private void exportPdf(String scoreCard, String detail) {
+        String content = (TextUtils.isEmpty(scoreCard) ? "SCORE CARD\n" : scoreCard) + "\n\nDETAIL\n" + (TextUtils.isEmpty(detail) ? "" : detail);
+        PdfDocument pdf = new PdfDocument();
+        Paint paint = new Paint();
+        paint.setTextSize(10f);
+        paint.setAntiAlias(true);
+        Paint titlePaint = new Paint();
+        titlePaint.setTextSize(18f);
+        titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        titlePaint.setAntiAlias(true);
+
+        int pageWidth = 842;
+        int pageHeight = 595;
+        int margin = 28;
+        int y = margin;
+        int pageNumber = 1;
+        PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create());
+        Canvas canvas = page.getCanvas();
+        canvas.drawText("NK Score Manager Score Card", margin, y, titlePaint);
+        y += 24;
+        String[] lines = content.split("\n", -1);
+        for (String line : lines) {
+            ArrayList<String> wrapped = wrapLine(line, 115);
+            for (String part : wrapped) {
+                if (y > pageHeight - margin) {
+                    pdf.finishPage(page);
+                    pageNumber++;
+                    page = pdf.startPage(new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create());
+                    canvas = page.getCanvas();
+                    y = margin;
+                }
+                canvas.drawText(part, margin, y, paint);
+                y += 14;
+            }
+        }
+        pdf.finishPage(page);
+
+        try {
+            File dir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
+            if (dir == null) dir = getFilesDir();
+            if (!dir.exists()) dir.mkdirs();
+            File file = new File(dir, "NKScore_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".pdf");
+            FileOutputStream out = new FileOutputStream(file);
+            pdf.writeTo(out);
+            out.close();
+            pdf.close();
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("NK Score PDF Path", file.getAbsolutePath()));
+            Toast.makeText(this, "PDFを保存しました。パスをコピーしました。", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            pdf.close();
+            Toast.makeText(this, "PDF保存に失敗しました。", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private ArrayList<String> wrapLine(String line, int maxChars) {
+        ArrayList<String> parts = new ArrayList<>();
+        if (line == null) line = "";
+        if (line.length() == 0) {
+            parts.add("");
+            return parts;
+        }
+        int start = 0;
+        while (start < line.length()) {
+            int end = Math.min(line.length(), start + maxChars);
+            parts.add(line.substring(start, end));
+            start = end;
+        }
+        return parts;
     }
 
     private String buildStatsText(ArrayList<RoundRecord> records) {
         long now = System.currentTimeMillis();
-        String three = averageText(records, now - 90L * 24L * 60L * 60L * 1000L, "過去3カ月");
-        String year = averageText(records, now - 365L * 24L * 60L * 60L * 1000L, "過去1年");
-        return three + "\n" + year;
+        return averageText(records, now - 90L * 24L * 60L * 60L * 1000L, "過去3カ月") + "\n" +
+                averageText(records, now - 365L * 24L * 60L * 60L * 1000L, "過去1年");
     }
 
     private String averageText(ArrayList<RoundRecord> records, long since, String label) {
@@ -660,6 +842,8 @@ public class MainActivity extends Activity {
         editor.putString(KEY_PREFIX + "putts", serializeIntArray(player1Putts));
         editor.putString(KEY_PREFIX + "teeResults", serializeIntArray(teeResults));
         editor.putString(KEY_PREFIX + "directions", serializeIntArray(directions));
+        editor.putString(KEY_PREFIX + "selectedDetail", encode(selectedHistoryDetail));
+        editor.putString(KEY_PREFIX + "selectedScoreCard", encode(selectedScoreCard));
         for (int p = 0; p < PLAYERS; p++) editor.putString(KEY_PREFIX + "scores_" + p, serializeIntArray(scores[p]));
         editor.putString(KEY_PREFIX + "lastSaved", nowFull());
         boolean ok = editor.commit();
@@ -676,6 +860,8 @@ public class MainActivity extends Activity {
         startTimeText = prefs.getString(KEY_PREFIX + "start", "");
         activePlayers = bound(prefs.getInt(KEY_PREFIX + "activePlayers", 1), 1, PLAYERS);
         currentHole = bound(prefs.getInt(KEY_PREFIX + "currentHole", 0), 0, HOLES - 1);
+        selectedHistoryDetail = decode(prefs.getString(KEY_PREFIX + "selectedDetail", ""));
+        selectedScoreCard = decode(prefs.getString(KEY_PREFIX + "selectedScoreCard", ""));
         restoreIntArray(prefs.getString(KEY_PREFIX + "pars", ""), pars, defaultPars, 3, 6);
         restoreStringArray(prefs.getString(KEY_PREFIX + "names", ""), playerNames);
         restoreIntArray(prefs.getString(KEY_PREFIX + "putts", ""), player1Putts, null, 0, 8);
@@ -708,6 +894,11 @@ public class MainActivity extends Activity {
         if (!TextUtils.isEmpty(courseText) || !TextUtils.isEmpty(teeText) || !TextUtils.isEmpty(startTimeText)) return true;
         for (int p = 0; p < PLAYERS; p++) for (int h = 0; h < HOLES; h++) if (scores[p][h] > 0) return true;
         return false;
+    }
+
+    private boolean isHoleComplete(int hole) {
+        for (int p = 0; p < activePlayers; p++) if (scores[p][hole] == 0) return false;
+        return true;
     }
 
     private int countMissingScores() {
@@ -840,15 +1031,8 @@ public class MainActivity extends Activity {
         button.setTextSize(15);
         button.setTextColor(0xFFFFFFFF);
         button.setAllCaps(false);
-        button.setMinHeight(dp(48));
+        button.setMinHeight(dp(50));
         button.setBackgroundResource(getResources().getIdentifier(primary ? "button_bg" : "secondary_button_bg", "drawable", getPackageName()));
-        return button;
-    }
-
-    private Button bigButton(String label, boolean primary) {
-        Button button = button(label, primary);
-        button.setTextSize(24);
-        button.setMinHeight(dp(62));
         return button;
     }
 
@@ -856,9 +1040,9 @@ public class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(label);
         button.setAllCaps(false);
-        button.setTextSize(16);
+        button.setTextSize(15);
         button.setTextColor(selected ? 0xFFFFFFFF : COLOR_TEXT);
-        button.setMinHeight(dp(56));
+        button.setMinHeight(dp(52));
         button.setBackground(rounded(selected ? COLOR_PRIMARY : 0xFFFFFFFF, selected ? COLOR_PRIMARY_DARK : COLOR_BORDER, 16));
         return button;
     }
@@ -902,8 +1086,27 @@ public class MainActivity extends Activity {
         return TextUtils.isEmpty(name) ? "Player " + (index + 1) : name.trim();
     }
 
+    private String shortName(String name) {
+        if (TextUtils.isEmpty(name)) return "P";
+        String n = name.length() > 4 ? name.substring(0, 4) : name;
+        while (n.length() < 4) n += " ";
+        return n;
+    }
+
     private String formatValue(int value) {
         return value <= 0 ? "-" : String.valueOf(value);
+    }
+
+    private String pad2(int value) {
+        if (value <= 0) return " - ";
+        return value < 10 ? " " + value + " " : value + " ";
+    }
+
+    private String pad3(int value) {
+        if (value <= 0) return "  -";
+        if (value < 10) return "  " + value;
+        if (value < 100) return " " + value;
+        return String.valueOf(value);
     }
 
     private String serializeIntArray(int[] values) {
@@ -953,7 +1156,8 @@ public class MainActivity extends Activity {
 
     private long parseDateMillis(String date) {
         try {
-            return new SimpleDateFormat("yyyy/MM/dd", Locale.US).parse(date).getTime();
+            Date parsed = new SimpleDateFormat("yyyy/MM/dd", Locale.US).parse(date);
+            return parsed == null ? System.currentTimeMillis() : parsed.getTime();
         } catch (Exception ignored) {
             return System.currentTimeMillis();
         }
@@ -988,8 +1192,15 @@ public class MainActivity extends Activity {
         void set(String value);
     }
 
-    private interface ChoiceSink {
-        void set(int index);
+    private static class TeeChoice {
+        String label;
+        int result;
+        int direction;
+        TeeChoice(String label, int result, int direction) {
+            this.label = label;
+            this.result = result;
+            this.direction = direction;
+        }
     }
 
     private static class RoundRecord {
@@ -1002,9 +1213,10 @@ public class MainActivity extends Activity {
         int fwKeep;
         int fwTarget;
         String detail;
+        String scoreCard;
 
         String toLine() {
-            return timestamp + "|" + enc(date) + "|" + enc(course) + "|" + total + "|" + parTotal + "|" + putts + "|" + fwKeep + "|" + fwTarget + "|" + enc(detail);
+            return timestamp + "|" + enc(date) + "|" + enc(course) + "|" + total + "|" + parTotal + "|" + putts + "|" + fwKeep + "|" + fwTarget + "|" + enc(detail) + "|" + enc(scoreCard);
         }
 
         static RoundRecord fromLine(String line) {
@@ -1021,6 +1233,7 @@ public class MainActivity extends Activity {
                 r.fwKeep = Integer.parseInt(parts[6]);
                 r.fwTarget = Integer.parseInt(parts[7]);
                 r.detail = dec(parts[8]);
+                r.scoreCard = parts.length > 9 ? dec(parts[9]) : r.detail;
                 return r;
             } catch (Exception ignored) {
                 return null;
