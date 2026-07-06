@@ -5,6 +5,7 @@ Android向けのゴルフスコア管理アプリです。
 ## Version
 
 - App version: 1.2.0
+- versionCode: 12
 - compileSdk: 36
 - targetSdk: 36
 - minSdk: 26
