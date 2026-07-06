@@ -11,6 +11,8 @@ import android.graphics.pdf.PdfDocument;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
@@ -42,35 +44,23 @@ import java.util.Locale;
 import java.util.Map;
 
 public class MainActivity extends Activity {
-    private static final int HOLES = 18;
-    private static final int PLAYERS = 4;
-    private static final int MAX_SCORE = 15;
+    private static final int HOLES = 18, PLAYERS = 4, MAX_SCORE = 15;
     private static final String PREF = "nk_score_manager_v22";
-    private static final String KEY_LANG = "lang";
-    private static final String KEY_HISTORY = "history";
-    private static final String KEY_CLUBS = "clubs";
-    private static final int REQ_BACKUP_CREATE = 1201;
-    private static final int REQ_RESTORE_OPEN = 1202;
+    private static final String KEY_LANG = "lang", KEY_HISTORY = "history", KEY_CLUBS = "clubs";
+    private static final int REQ_BACKUP_CREATE = 1301, REQ_RESTORE_OPEN = 1302;
     private static final int SCREEN_HOME = 0, SCREEN_ROUND = 1, SCREEN_HISTORY = 2, SCREEN_ANALYSIS = 3, SCREEN_SETTINGS = 4;
     private static final int C_BG = 0xFFF8FAFC, C_CARD = 0xFFFFFFFF, C_TEXT = 0xFF0F172A, C_MUTED = 0xFF64748B, C_BORDER = 0xFFE2E8F0, C_PRIMARY = 0xFF166534, C_PRIMARY_DARK = 0xFF14532D, C_SOFT = 0xFFDCFCE7, C_PANEL = 0xFFEFF6FF, C_DANGER = 0xFFFEE2E2;
 
     private final int[] defaultPars = {4,4,3,5,4,4,5,3,4,4,5,4,3,4,4,5,3,4};
     private final String[] langCodes = {"ja","en","ko","zh","de"};
     private final String[] langNames = {"日本語","English","한국어","中文","Deutsch"};
+    private final String[] langShort = {"JP","EN","KO","中文","DE"};
 
     private ScrollView scroll;
     private LinearLayout root;
-    private int screen = SCREEN_HOME;
-    private String lang = "";
-    private boolean registration = false;
-    private boolean cancelConfirm = false;
-    private boolean binding = false;
-    private int activePlayers = 1;
-    private int currentHole = 0;
-    private int tensPendingPlayer = -1;
-    private String course = "";
-    private String tee = "";
-    private String start = "";
+    private int screen = SCREEN_HOME, activePlayers = 1, currentHole = 0, tensPendingPlayer = -1;
+    private String lang = "", course = "", tee = "", start = "", selectedDetail = "";
+    private boolean registration = false, cancelConfirm = false, binding = false, savePending = false;
 
     private final int[] pars = new int[HOLES];
     private final String[] names = {"Player 1","Player 2","Player 3","Player 4"};
@@ -78,13 +68,15 @@ public class MainActivity extends Activity {
     private final int[] putts = new int[HOLES];
     private final int[] teeResults = new int[HOLES];
     private final String[] teeClubs = new String[HOLES];
-    private String selectedDetail = "";
 
     private TextView progressText;
     private final TextView[] scoreLabels = new TextView[PLAYERS];
     private final Button[] holeButtons = new Button[HOLES];
     private final Button[] puttButtons = new Button[5];
     private final Button[] teeButtons = new Button[6];
+
+    private final Handler saveHandler = new Handler(Looper.getMainLooper());
+    private final Runnable delayedSave = () -> saveDraftNow(false);
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -97,8 +89,9 @@ public class MainActivity extends Activity {
         else renderHome();
     }
 
-    @Override protected void onPause() { saveDraft(); super.onPause(); }
-    @Override protected void onStop() { saveDraft(); super.onStop(); }
+    @Override protected void onPause() { flushSave(); super.onPause(); }
+    @Override protected void onStop() { flushSave(); super.onStop(); }
+    @Override protected void onDestroy() { flushSave(); super.onDestroy(); }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -134,6 +127,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < langCodes.length; i++) {
             final String code = langCodes[i];
             Button b = button(langNames[i], code.equals(lang));
+            b.setSingleLine(true);
             b.setOnClickListener(v -> { lang = code; prefs().edit().putString(KEY_LANG, code).apply(); toast(t("saved")); renderHome(); });
             c.addView(b, full());
         }
@@ -146,14 +140,13 @@ public class MainActivity extends Activity {
         screen = SCREEN_HOME;
         registration = false;
         cancelConfirm = false;
-        saveDraft();
+        saveDraftNow(false);
         root.removeAllViews();
         root.addView(hero("NK Golf Score", t("concept")));
         LinearLayout pitch = card();
         pitch.addView(section(t("why")));
         pitch.addView(panel("The fastest golf score app in the world.\nWorks offline. No ads. No subscription. Just $1.\n\n" + t("value_points"), true));
         root.addView(pitch);
-
         LinearLayout c = card();
         c.addView(section(t("round")));
         Button startBtn = button(t("start_round"), true);
@@ -225,7 +218,9 @@ public class MainActivity extends Activity {
         Spinner sp = spinner(new String[]{"1", "2", "3", "4"});
         binding = true; sp.setSelection(activePlayers - 1); binding = false;
         sp.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) { if (!binding && activePlayers != pos + 1) { activePlayers = pos + 1; saveDraft(); renderRound(true); } }
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
+                if (!binding && activePlayers != pos + 1) { activePlayers = pos + 1; flushSave(); renderRound(true); }
+            }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
         pc.addView(sp, new LinearLayout.LayoutParams(dp(100), LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -249,9 +244,9 @@ public class MainActivity extends Activity {
             for (int col = 0; col < 6; col++) {
                 int h = r * 6 + col;
                 Button b = new Button(this);
-                b.setText(String.valueOf(h + 1)); b.setTextSize(12); b.setAllCaps(false);
+                b.setText(String.valueOf(h + 1)); b.setTextSize(12); b.setAllCaps(false); b.setMinHeight(dp(40));
                 final int target = h;
-                b.setOnClickListener(v -> { currentHole = target; tensPendingPlayer = -1; saveDraft(); renderRound(false); });
+                b.setOnClickListener(v -> { currentHole = target; tensPendingPlayer = -1; flushSave(); renderRound(false); });
                 holeButtons[h] = b;
                 styleHoleButton(h);
                 line.addView(b, weight(1));
@@ -281,7 +276,7 @@ public class MainActivity extends Activity {
         for (int par = 3; par <= 6; par++) {
             final int value = par;
             Button b = choice(String.valueOf(par), pars[currentHole] == par);
-            b.setOnClickListener(v -> { pars[currentHole] = value; saveDraft(); renderRound(true); });
+            b.setOnClickListener(v -> { pars[currentHole] = value; flushSave(); renderRound(true); });
             r.addView(b, weight(1));
         }
         c.addView(r);
@@ -312,14 +307,14 @@ public class MainActivity extends Activity {
             LinearLayout line = row();
             for (String key : keys) {
                 Button b = choice(key, false);
-                b.setMinHeight(dp(54));
+                b.setMinHeight(dp(52));
                 b.setOnClickListener(v -> handleScoreKey(player, key));
                 line.addView(b, weight(1));
             }
             g.addView(line);
         }
         Button clear = button(t("clear"), false);
-        clear.setOnClickListener(v -> { scores[player][currentHole] = 0; tensPendingPlayer = -1; saveDraft(); refreshLiveInput(player); });
+        clear.setOnClickListener(v -> { scores[player][currentHole] = 0; tensPendingPlayer = -1; requestSave(); refreshScoreInput(player); });
         g.addView(clear, full());
         return g;
     }
@@ -327,7 +322,7 @@ public class MainActivity extends Activity {
     private void handleScoreKey(int player, String key) {
         if ("1+".equals(key)) {
             tensPendingPlayer = player;
-            refreshLiveInput(player);
+            refreshScoreInput(player);
             return;
         }
         int digit = num(key, -1);
@@ -338,17 +333,14 @@ public class MainActivity extends Activity {
         } else {
             scores[player][currentHole] = digit == 0 ? 0 : digit;
         }
-        saveDraft();
-        refreshLiveInput(player);
+        requestSave();
+        refreshScoreInput(player);
     }
 
-    private void refreshLiveInput(int changedPlayer) {
+    private void refreshScoreInput(int changedPlayer) {
         if (scoreLabels[changedPlayer] != null) scoreLabels[changedPlayer].setText(scoreLabelText(changedPlayer));
-        if (tensPendingPlayer >= 0 && tensPendingPlayer < scoreLabels.length && tensPendingPlayer != changedPlayer && scoreLabels[tensPendingPlayer] != null) scoreLabels[tensPendingPlayer].setText(scoreLabelText(tensPendingPlayer));
         updateProgressOnly();
-        for (int i = 0; i < HOLES; i++) styleHoleButton(i);
-        updatePuttStyles();
-        updateTeeStyles();
+        styleHoleButton(currentHole);
     }
 
     private View puttButtonsView() {
@@ -359,7 +351,7 @@ public class MainActivity extends Activity {
             final int value = p;
             Button b = choice(p == 4 ? "4+" : String.valueOf(p), putts[currentHole] == p);
             puttButtons[p] = b;
-            b.setOnClickListener(v -> { putts[currentHole] = value; saveDraft(); updatePuttStyles(); });
+            b.setOnClickListener(v -> { putts[currentHole] = value; requestSave(); updatePuttStyles(); });
             r.addView(b, weight(1));
         }
         g.addView(r);
@@ -372,7 +364,7 @@ public class MainActivity extends Activity {
         Spinner sp = spinner(clubList());
         int sel = 0; String[] clubs = clubList(); for (int i = 0; i < clubs.length; i++) if (clubs[i].equals(teeClubs[currentHole])) sel = i;
         binding = true; sp.setSelection(sel); binding = false;
-        sp.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() { @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) { if (!binding) { teeClubs[currentHole] = clubList()[pos]; saveDraft(); } } @Override public void onNothingSelected(AdapterView<?> p) {} });
+        sp.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() { @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) { if (!binding) { teeClubs[currentHole] = clubList()[pos]; requestSave(); } } @Override public void onNothingSelected(AdapterView<?> p) {} });
         g.addView(sp);
         LinearLayout r1 = row(); addTee(r1, "FW", 1); addTee(r1, t("left_rough"), 2); addTee(r1, t("right_rough"), 3); g.addView(r1);
         LinearLayout r2 = row(); addTee(r2, t("left_ob"), 4); addTee(r2, t("right_ob"), 5); addTee(r2, "-", 0); g.addView(r2);
@@ -382,7 +374,7 @@ public class MainActivity extends Activity {
     private void addTee(LinearLayout row, String label, int value) {
         Button b = choice(label, teeResults[currentHole] == value);
         teeButtons[value] = b;
-        b.setOnClickListener(v -> { teeResults[currentHole] = value; saveDraft(); updateTeeStyles(); updateProgressOnly(); });
+        b.setOnClickListener(v -> { teeResults[currentHole] = value; requestSave(); updateTeeStyles(); });
         row.addView(b, weight(1));
     }
 
@@ -397,18 +389,9 @@ public class MainActivity extends Activity {
         b.setBackground(rounded(h == currentHole ? C_PRIMARY : (holeComplete(h) ? C_SOFT : C_DANGER), C_BORDER, 12));
     }
 
-    private void updatePuttStyles() {
-        for (int p = 1; p <= 4; p++) if (puttButtons[p] != null) setChoiceStyle(puttButtons[p], putts[currentHole] == p);
-    }
-
-    private void updateTeeStyles() {
-        for (int i = 0; i < teeButtons.length; i++) if (teeButtons[i] != null) setChoiceStyle(teeButtons[i], teeResults[currentHole] == i);
-    }
-
-    private void setChoiceStyle(Button b, boolean selected) {
-        b.setTextColor(selected ? 0xFFFFFFFF : C_TEXT);
-        b.setBackground(rounded(selected ? C_PRIMARY : C_CARD, selected ? C_PRIMARY_DARK : C_BORDER, 14));
-    }
+    private void updatePuttStyles() { for (int p = 1; p <= 4; p++) if (puttButtons[p] != null) setChoiceStyle(puttButtons[p], putts[currentHole] == p); }
+    private void updateTeeStyles() { for (int i = 0; i < teeButtons.length; i++) if (teeButtons[i] != null) setChoiceStyle(teeButtons[i], teeResults[currentHole] == i); }
+    private void setChoiceStyle(Button b, boolean selected) { b.setTextColor(selected ? 0xFFFFFFFF : C_TEXT); b.setBackground(rounded(selected ? C_PRIMARY : C_CARD, selected ? C_PRIMARY_DARK : C_BORDER, 14)); }
 
     private View finishCard() {
         LinearLayout c = card();
@@ -419,13 +402,14 @@ public class MainActivity extends Activity {
             c.addView(panel(t("cancel_confirm"), false));
             LinearLayout r = row();
             Button back = button(t("back_input"), true); back.setOnClickListener(v -> { cancelConfirm = false; renderRound(true); });
-            Button home = button(t("back_home"), false); home.setOnClickListener(v -> { registration = false; cancelConfirm = false; saveDraft(); renderHome(); });
+            Button home = button(t("back_home"), false); home.setOnClickListener(v -> { registration = false; cancelConfirm = false; saveDraftNow(false); renderHome(); });
             r.addView(back, weight(1)); r.addView(home, weight(1)); c.addView(r);
         }
         return c;
     }
 
     private void finishRound() {
+        flushSave();
         int m = missing();
         if (m > 0) { toast(t("missing") + ": " + m); updateProgressOnly(); return; }
         RoundRecord r = buildRecord();
@@ -480,7 +464,7 @@ public class MainActivity extends Activity {
 
     private void renderHistory() {
         clearRuntimeViews();
-        screen = SCREEN_HISTORY; registration = false; saveDraft(); root.removeAllViews();
+        screen = SCREEN_HISTORY; registration = false; saveDraftNow(false); root.removeAllViews();
         root.addView(hero(t("history"), t("history_sub")));
         LinearLayout c = card(); ArrayList<RoundRecord> list = loadHistory();
         if (list.isEmpty()) c.addView(panel(t("no_history"), false));
@@ -497,7 +481,7 @@ public class MainActivity extends Activity {
 
     private void renderAnalysis() {
         clearRuntimeViews();
-        screen = SCREEN_ANALYSIS; registration = false; saveDraft(); root.removeAllViews();
+        screen = SCREEN_ANALYSIS; registration = false; saveDraftNow(false); root.removeAllViews();
         root.addView(hero(t("analysis"), t("analysis_sub")));
         ArrayList<RoundRecord> list = loadHistory();
         LinearLayout c = card(); c.addView(panel(statsText(list) + "\n\n" + aggregateClubAnalysis(list), true));
@@ -506,7 +490,7 @@ public class MainActivity extends Activity {
 
     private void renderSettings() {
         clearRuntimeViews();
-        screen = SCREEN_SETTINGS; registration = false; saveDraft(); root.removeAllViews();
+        screen = SCREEN_SETTINGS; registration = false; saveDraftNow(false); root.removeAllViews();
         root.addView(hero(t("settings_short"), t("settings_sub")));
         LinearLayout c = card();
         c.addView(section(t("club_set")));
@@ -559,6 +543,7 @@ public class MainActivity extends Activity {
     }
 
     private void createBackupDocument() {
+        flushSave();
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("text/plain");
@@ -575,15 +560,13 @@ public class MainActivity extends Activity {
 
     private void writeBackupToUri(Uri uri) {
         try {
-            saveDraft();
+            flushSave();
             OutputStream out = getContentResolver().openOutputStream(uri);
             if (out == null) throw new Exception("openOutputStream failed");
             out.write(buildBackupText().getBytes(StandardCharsets.UTF_8));
             out.close();
             toast(t("backup_saved"));
-        } catch (Exception e) {
-            toast(t("backup_failed"));
-        }
+        } catch (Exception e) { toast(t("backup_failed")); }
     }
 
     private void restoreBackupFromUri(Uri uri) {
@@ -601,17 +584,14 @@ public class MainActivity extends Activity {
             restoreDraft();
             toast(t("restore_done"));
             renderHome();
-        } catch (Exception e) {
-            toast(t("restore_failed"));
-        }
+        } catch (Exception e) { toast(t("restore_failed")); }
     }
 
     private String buildBackupText() {
-        StringBuilder b = new StringBuilder("NK_GOLF_SCORE_BACKUP_V24\n");
+        StringBuilder b = new StringBuilder("NK_GOLF_SCORE_BACKUP_V25\n");
         Map<String, ?> all = prefs().getAll();
         for (Map.Entry<String, ?> e : all.entrySet()) {
-            Object v = e.getValue();
-            String key = enc(e.getKey());
+            Object v = e.getValue(); String key = enc(e.getKey());
             if (v instanceof String) b.append("S|").append(key).append("|").append(enc((String) v)).append("\n");
             else if (v instanceof Integer) b.append("I|").append(key).append("|").append(v).append("\n");
             else if (v instanceof Boolean) b.append("B|").append(key).append("|").append(v).append("\n");
@@ -621,13 +601,11 @@ public class MainActivity extends Activity {
     }
 
     private void applyBackupText(String raw) throws Exception {
-        if (TextUtils.isEmpty(raw) || !(raw.startsWith("NK_GOLF_SCORE_BACKUP_V24") || raw.startsWith("NK_GOLF_SCORE_BACKUP_V23"))) throw new Exception("invalid backup");
-        SharedPreferences.Editor e = prefs().edit();
-        e.clear();
+        if (TextUtils.isEmpty(raw) || !(raw.startsWith("NK_GOLF_SCORE_BACKUP_V25") || raw.startsWith("NK_GOLF_SCORE_BACKUP_V24") || raw.startsWith("NK_GOLF_SCORE_BACKUP_V23"))) throw new Exception("invalid backup");
+        SharedPreferences.Editor e = prefs().edit(); e.clear();
         for (String line : raw.split("\n", -1)) {
             if (TextUtils.isEmpty(line) || line.startsWith("NK_GOLF_SCORE_BACKUP_")) continue;
-            String[] p = line.split("\\|", -1);
-            if (p.length < 3) continue;
+            String[] p = line.split("\\|", -1); if (p.length < 3) continue;
             String key = dec(p[1]);
             if ("S".equals(p[0])) e.putString(key, dec(p[2]));
             else if ("I".equals(p[0])) e.putInt(key, num(p[2], 0));
@@ -637,11 +615,24 @@ public class MainActivity extends Activity {
         e.apply();
     }
 
-    private void saveDraft() {
+    private void requestSave() {
+        savePending = true;
+        saveHandler.removeCallbacks(delayedSave);
+        saveHandler.postDelayed(delayedSave, 700L);
+    }
+
+    private void flushSave() {
+        saveHandler.removeCallbacks(delayedSave);
+        if (savePending) saveDraftNow(false);
+    }
+
+    private void saveDraftNow(boolean showToast) {
+        savePending = false;
         SharedPreferences.Editor e = prefs().edit();
         e.putString(KEY_LANG, lang); e.putBoolean("registration", registration); e.putString("course", course); e.putString("tee", tee); e.putString("start", start); e.putInt("players", activePlayers); e.putInt("hole", currentHole); e.putString("pars", ser(pars)); e.putString("names", ser(names)); e.putString("putts", ser(putts)); e.putString("teeResults", ser(teeResults)); e.putString("teeClubs", ser(teeClubs));
         for (int p = 0; p < PLAYERS; p++) e.putString("scores" + p, ser(scores[p]));
         e.apply();
+        if (showToast) toast(t("saved"));
     }
 
     private void restoreDraft() {
@@ -655,7 +646,7 @@ public class MainActivity extends Activity {
         course = ""; tee = ""; start = ""; activePlayers = 1; currentHole = 0; tensPendingPlayer = -1; cancelConfirm = false; registration = keep;
         System.arraycopy(defaultPars,0,pars,0,HOLES); for (int p=0;p<PLAYERS;p++){ names[p]="Player "+(p+1); for(int h=0;h<HOLES;h++) scores[p][h]=0; }
         for (int h=0;h<HOLES;h++){ putts[h]=0; teeResults[h]=0; teeClubs[h]=clubList()[0]; }
-        saveDraft();
+        saveDraftNow(false);
     }
 
     private ArrayList<RoundRecord> loadHistory(){ ArrayList<RoundRecord> list = new ArrayList<>(); String raw = prefs().getString(KEY_HISTORY, ""); if(TextUtils.isEmpty(raw)) return list; for(String line: raw.split("\n", -1)){ RoundRecord r = RoundRecord.fromLine(line); if(r != null) list.add(r); } return list; }
@@ -669,11 +660,11 @@ public class MainActivity extends Activity {
     private int countTeeTargets(){ int n=0; for(int v: teeResults) if(v>0)n++; return n; }
     private int total(int p){ int t=0; for(int h=0;h<HOLES;h++) t += scores[p][h]; return t; }
     private int sum(int[] a){ int t=0; for(int v:a)t+=v; return t; }
-    private void moveHole(int d){ currentHole=bound(currentHole+d,0,HOLES-1); tensPendingPlayer=-1; saveDraft(); renderRound(false); }
+    private void moveHole(int d){ currentHole=bound(currentHole+d,0,HOLES-1); tensPendingPlayer=-1; flushSave(); renderRound(false); }
     private String rowValues(int[] values, boolean hideZero){ StringBuilder b=new StringBuilder(); int out=0,in=0,total=0; for(int h=0;h<HOLES;h++){int v=values[h]; b.append(hideZero&&v==0?" - ":pad2(v)); if(h<9)out+=v;else in+=v; total+=v; if(h==8)b.append("|").append(pad2(out)).append("|");} b.append("|").append(pad2(in)).append("|").append(pad3(total)); return b.toString(); }
 
     private void addNav(){ LinearLayout n=row(); Button h=button(t("home"),screen==SCREEN_HOME);h.setOnClickListener(v->renderHome()); Button hi=button(t("history"),screen==SCREEN_HISTORY);hi.setOnClickListener(v->renderHistory()); Button a=button(t("analysis"),screen==SCREEN_ANALYSIS);a.setOnClickListener(v->renderAnalysis()); Button s=button(t("settings_short"),screen==SCREEN_SETTINGS);s.setOnClickListener(v->renderSettings()); n.addView(h,weight(1)); n.addView(hi,weight(1)); n.addView(a,weight(1)); n.addView(s,weight(1)); root.addView(n); addLanguageFooter(); }
-    private void addLanguageFooter(){ LinearLayout c=card(); c.addView(section(t("language"))); LinearLayout r=row(); for(int i=0;i<langCodes.length;i++){ final String code=langCodes[i]; Button b=button(langNames[i], code.equals(lang)); b.setTextSize(11); b.setOnClickListener(v->{ lang=code; prefs().edit().putString(KEY_LANG,code).apply(); toast(t("saved")); if(screen==SCREEN_HOME)renderHome(); else if(screen==SCREEN_ROUND)renderRound(true); else if(screen==SCREEN_HISTORY)renderHistory(); else if(screen==SCREEN_ANALYSIS)renderAnalysis(); else renderSettings(); }); r.addView(b,weight(1)); } c.addView(r); root.addView(c); }
+    private void addLanguageFooter(){ LinearLayout c=card(); c.addView(section(t("language"))); LinearLayout r=row(); r.setGravity(Gravity.CENTER); for(int i=0;i<langCodes.length;i++){ final String code=langCodes[i]; Button b=languageButton(langShort[i], code.equals(lang)); b.setOnClickListener(v->{ lang=code; prefs().edit().putString(KEY_LANG,code).apply(); toast(t("saved")); if(screen==SCREEN_HOME)renderHome(); else if(screen==SCREEN_ROUND)renderRound(true); else if(screen==SCREEN_HISTORY)renderHistory(); else if(screen==SCREEN_ANALYSIS)renderAnalysis(); else renderSettings(); }); r.addView(b, weightFixed(1, dp(44))); } c.addView(r); root.addView(c); }
     private View hero(String title,String sub){ LinearLayout c=card(); c.setGravity(Gravity.CENTER_HORIZONTAL); ImageView logo=new ImageView(this); logo.setImageResource(getResources().getIdentifier("ic_launcher","drawable",getPackageName())); LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(68),dp(68)); lp.gravity=Gravity.CENTER_HORIZONTAL; c.addView(logo,lp); TextView t=text(title,25,C_TEXT,true);t.setGravity(Gravity.CENTER_HORIZONTAL);c.addView(t);TextView st=text(sub,13,C_MUTED,false);st.setGravity(Gravity.CENTER_HORIZONTAL);c.addView(st); return c; }
     private LinearLayout card(){ LinearLayout v=new LinearLayout(this); v.setOrientation(LinearLayout.VERTICAL); v.setPadding(dp(14),dp(14),dp(14),dp(14)); v.setBackground(rounded(C_CARD,C_BORDER,18)); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT); p.setMargins(0,dp(6),0,dp(6)); v.setLayoutParams(p); return v; }
     private LinearLayout lite(){ LinearLayout v=new LinearLayout(this); v.setOrientation(LinearLayout.VERTICAL); v.setPadding(dp(10),dp(10),dp(10),dp(10)); v.setBackground(rounded(0xFFF8FAFC,C_BORDER,16)); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT); p.setMargins(0,dp(5),0,dp(5)); v.setLayoutParams(p); return v; }
@@ -684,11 +675,13 @@ public class MainActivity extends Activity {
     private TextView text(String s,int size,int color,boolean bold){ TextView v=new TextView(this); v.setText(s); v.setTextSize(size); v.setTextColor(color); if(bold)v.setTypeface(Typeface.DEFAULT_BOLD); return v; }
     private Button button(String label,boolean primary){ Button b=new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(14); b.setTextColor(0xFFFFFFFF); b.setMinHeight(dp(48)); b.setBackgroundResource(getResources().getIdentifier(primary?"button_bg":"secondary_button_bg","drawable",getPackageName())); return b; }
     private Button choice(String label,boolean selected){ Button b=new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(15); b.setTextColor(selected?0xFFFFFFFF:C_TEXT); b.setMinHeight(dp(50)); b.setBackground(rounded(selected?C_PRIMARY:C_CARD,selected?C_PRIMARY_DARK:C_BORDER,14)); return b; }
+    private Button languageButton(String label, boolean selected){ Button b=new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(11); b.setSingleLine(true); b.setGravity(Gravity.CENTER); b.setIncludeFontPadding(false); b.setMinHeight(0); b.setMinimumHeight(0); b.setPadding(0,0,0,0); b.setTextColor(selected?0xFFFFFFFF:C_TEXT); b.setBackground(rounded(selected?C_PRIMARY:C_CARD, selected?C_PRIMARY_DARK:C_BORDER, 12)); return b; }
     private EditText input(String hint){ EditText e=new EditText(this); e.setHint(hint); e.setTextSize(14); e.setSingleLine(true); e.setTextColor(C_TEXT); e.setHintTextColor(0xFF94A3B8); e.setPadding(dp(8),dp(6),dp(8),dp(6)); return e; }
     private Spinner spinner(String[] values){ Spinner s=new Spinner(this); ArrayAdapter<String> a=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,values); a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item); s.setAdapter(a); return s; }
-    private void watch(EditText e, Sink sink){ e.addTextChangedListener(new TextWatcher(){ public void beforeTextChanged(CharSequence s,int st,int c,int a){} public void onTextChanged(CharSequence s,int st,int b,int c){ sink.set(s==null?"":s.toString()); saveDraft(); } public void afterTextChanged(Editable e){} }); }
+    private void watch(EditText e, Sink sink){ e.addTextChangedListener(new TextWatcher(){ public void beforeTextChanged(CharSequence s,int st,int c,int a){} public void onTextChanged(CharSequence s,int st,int b,int c){ sink.set(s==null?"":s.toString()); requestSave(); } public void afterTextChanged(Editable e){} }); }
     private LinearLayout.LayoutParams full(){ LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT); p.setMargins(0,dp(5),0,dp(5)); return p; }
     private LinearLayout.LayoutParams weight(float w){ LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,w); p.setMargins(dp(2),dp(2),dp(2),dp(2)); return p; }
+    private LinearLayout.LayoutParams weightFixed(float w,int h){ LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,h,w); p.setMargins(dp(2),0,dp(2),0); return p; }
 
     private String t(String k){ String l=TextUtils.isEmpty(lang)?"en":lang; if("ja".equals(l))return ja(k); if("ko".equals(l))return ko(k); if("zh".equals(l))return zh(k); if("de".equals(l))return de(k); return en(k); }
     private String en(String k){ switch(k){case"concept":return"The fastest golf score app. Works offline.";case"why":return"Why choose this app?";case"value_points":return"Offline / No ads / No subscription / No account / Fewer taps";case"language":return"Language";case"language_note":return"Choose on first launch. You can change it at the bottom anytime.";case"round":return"Round";case"start_round":return"Start Round";case"resume_round":return"Resume Round";case"history":return"History";case"analysis":return"Analysis";case"settings":return"Settings / Backup";case"settings_short":return"Settings";case"recent":return"Recent Stats";case"round_settings":return"Round Settings";case"course":return"Course";case"tee":return"Tee";case"start":return"Start time / OUT / IN";case"players":return"Players";case"player":return"Player";case"progress":return"Progress";case"missing":return"Missing";case"score_input":return"Score Input";case"prev":return"Prev Hole";case"next":return"Next Hole";case"ten_mode":return"10s mode: press 0-5";case"ten_error":return"10s mode supports 10-15 only.";case"clear":return"Clear";case"tee_result":return"Tee / Club / Result";case"left_rough":return"Left Rough";case"right_rough":return"Right Rough";case"left_ob":return"Left OB";case"right_ob":return"Right OB";case"finish":return"Finish";case"save_analysis":return"Save and View Analysis";case"cancel":return"Cancel / End";case"cancel_confirm":return"End score entry? You can return to input if this was a mistake.";case"back_input":return"Back to Input";case"back_home":return"Back Home";case"history_sub":return"Scorecards and PDF";case"analysis_sub":return"Club and trend analysis";case"settings_sub":return"Clubs and backup";case"club_set":return"Club Set";case"save":return"Save";case"backup":return"Backup / Restore";case"backup_note":return"Save a backup file to Google Drive, then restore from that file on this or another device.";case"backup_save":return"Save Backup";case"restore_backup":return"Restore from Backup";case"backup_saved":return"Backup saved";case"backup_failed":return"Backup failed";case"restore_done":return"Restored";case"restore_failed":return"Restore failed";case"no_history":return"No history yet.";case"detail":return"Detail";case"no_data":return"No data";case"club_analysis":return"Club Analysis";case"today_analysis":return"Today's Analysis";case"right_miss":return"Right-side misses are frequent.";case"left_miss":return"Left-side misses are frequent.";case"ob_advice":return"Multiple OBs. Consider clubbing down on tight holes.";case"used":return"used ";case"course_empty":return"No course";case"saved":return"Saved";case"pdf_saved":return"PDF saved";case"pdf_failed":return"PDF failed";}return k;}
