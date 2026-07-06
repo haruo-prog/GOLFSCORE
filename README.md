@@ -2,27 +2,45 @@
 
 Android向けのゴルフスコア管理アプリです。
 
+## Store Concept
+
+**The fastest golf score app in the world. Works offline. No ads. No subscription. Just $1.**
+
 ## Version
 
-- App version: 1.9.0
-- V2.1 keypad input update
-- versionCode: 21
+- App version: 1.10.0
+- V2.2 language selection and offline one-dollar concept
+- versionCode: 22
 - compileSdk: 36
 - targetSdk: 36
 - minSdk: 26
 
-## V2.1変更点
+## V2.2変更点
 
-- スコア入力をテンキー式に変更
-- 0から9の数字ボタンを追加
-- 1+ボタンを追加
+- 全世界コース選択の表示を削除
+- 初回起動時に言語選択画面を表示
+- 最下部に言語選択を追加
+- 対応言語
+  - 日本語
+  - English
+  - 한국어
+  - 中文
+  - Deutsch
+- ホーム画面に世界向けコンセプトを追加
+- オフライン対応、広告なし、サブスクなし、アカウント不要、少ないタップを訴求
+- スコア入力はテンキー式を継続
 - 1+を押した後に0から5を押すと10から15を入力
-- 0単独入力は未入力クリアとして扱う
-- 登録画面最下部にキャンセル終了を追加
-- キャンセル終了後に再確認を表示
-- 登録画面へ戻る、ホームへ戻るを選択可能
-- 全世界コース選択は商用利用可能なコースDB/APIが必要なため今回は未実装
-- コーステンプレート保存と読込を継続
+- キャンセル終了後に登録画面へ戻れる導線を継続
+
+## Product Positioning
+
+- Works offline
+- No ads
+- No subscription
+- No account required
+- Fast launch
+- Fewer taps during the round
+- Buy once, lifetime access
 
 ## 主な機能
 
@@ -32,19 +50,10 @@ Android向けのゴルフスコア管理アプリです。
 - Player2からPlayer4はスコアのみ
 - クラブセット登録
 - Player1のティーショットに使用クラブを記録
-- クラブ別FW率、OB数、右ミス傾向を分析
-- コーステンプレート保存と読込
-- コース別平均、ベスト、ラウンド回数を分析
-- ホール別の苦手ホール分析
+- クラブ別FW率、OB数を分析
 - ラウンド後に自動分析コメントを生成
 - スコアカードPDF出力
-- PDF保存先指定と保存先記憶
-- Google DriveフォルダをPDF保存先に指定可能
-- Google Driveへバックアップ保存可能
-- Google Driveからバックアップファイルを選択してリストア可能
-- 当日使用クラブ写真を撮影してWebP軽量保存
 - NKTSロゴをアプリアイコンに設定
-- 1秒間隔の自動保存
 
 ## ビルド方法
 
