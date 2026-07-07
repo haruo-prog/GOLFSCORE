@@ -10,8 +10,30 @@ android {
         applicationId = "jp.co.nkts.scoremanager"
         minSdk = 26
         targetSdk = 36
-        versionCode = 28
-        versionName = "1.16.0"
+        versionCode = 29
+        versionName = "1.17.0"
+    }
+
+    flavorDimensions += "edition"
+    productFlavors {
+        create("free") {
+            dimension = "edition"
+            applicationIdSuffix = ".free"
+            versionNameSuffix = "-free"
+            resValue("string", "app_name", "Golf Scorecard Free")
+            buildConfigField("boolean", "PAID_EDITION", "false")
+        }
+        create("paid") {
+            dimension = "edition"
+            applicationIdSuffix = ".paid"
+            versionNameSuffix = "-paid"
+            resValue("string", "app_name", "Golf Scorecard Pro")
+            buildConfigField("boolean", "PAID_EDITION", "true")
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {
