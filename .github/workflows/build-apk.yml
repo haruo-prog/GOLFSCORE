@@ -37,11 +37,11 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build debug APK
+      - name: Build free and paid debug APKs
         id: build_apk
         run: |
           set +e
-          gradle assembleDebug --stacktrace 2>&1 | tee build-output.log
+          gradle assembleFreeDebug assemblePaidDebug --stacktrace 2>&1 | tee build-output.log
           BUILD_EXIT=${PIPESTATUS[0]}
           echo "exit_code=${BUILD_EXIT}" >> "$GITHUB_OUTPUT"
           exit 0
@@ -57,22 +57,23 @@ jobs:
         if: steps.build_apk.outputs.exit_code != '0'
         run: exit ${{ steps.build_apk.outputs.exit_code }}
 
-      - name: Prepare release APK
+      - name: Prepare release APKs
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/debug/app-debug.apk release/Golf-Scorecard-Offline-v1.16.0-v28-debug.apk
+          cp app/build/outputs/apk/free/debug/app-free-debug.apk release/Golf-Scorecard-Offline-Free-v1.17.0-v29-debug.apk
+          cp app/build/outputs/apk/paid/debug/app-paid-debug.apk release/Golf-Scorecard-Offline-Pro-v1.17.0-v29-debug.apk
 
-      - name: Upload APK artifact
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Golf-Scorecard-Offline-debug-apk
-          path: release/Golf-Scorecard-Offline-v1.16.0-v28-debug.apk
+          name: Golf-Scorecard-Offline-free-paid-debug-apks
+          path: release/*.apk
 
-      - name: Commit APK to release folder
+      - name: Commit APKs to release folder
         if: github.event_name != 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add release/Golf-Scorecard-Offline-v1.16.0-v28-debug.apk
-          git diff --cached --quiet && echo "No APK changes to commit" || git commit -m "Add latest debug APK [skip ci]"
+          git add release/Golf-Scorecard-Offline-Free-v1.17.0-v29-debug.apk release/Golf-Scorecard-Offline-Pro-v1.17.0-v29-debug.apk
+          git diff --cached --quiet && echo "No APK changes to commit" || git commit -m "Add latest free and pro debug APKs [skip ci]"
           git push
