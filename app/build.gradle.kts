@@ -10,8 +10,8 @@ android {
         applicationId = "jp.co.nkts.scoremanager"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "1.19.0"
+        versionCode = 32
+        versionName = "1.20.0"
     }
 
     flavorDimensions += "edition"
