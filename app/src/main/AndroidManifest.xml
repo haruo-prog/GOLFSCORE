@@ -11,7 +11,7 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity
-            android:name=".PolishedMainActivity"
+            android:name=".ScorecardV214Activity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
