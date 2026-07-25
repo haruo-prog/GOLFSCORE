@@ -60,13 +60,13 @@ jobs:
       - name: Prepare release APKs
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/free/debug/app-free-debug.apk release/Golf-Scorecard-Offline-Free-v1.21.0-v33-debug.apk
-          cp app/build/outputs/apk/paid/debug/app-paid-debug.apk release/Golf-Scorecard-Offline-Pro-v1.21.0-v33-debug.apk
+          cp app/build/outputs/apk/free/debug/app-free-debug.apk release/Golf-Scorecard-Offline-Free-v1.22.0-v34-debug.apk
+          cp app/build/outputs/apk/paid/debug/app-paid-debug.apk release/Golf-Scorecard-Offline-Pro-v1.22.0-v34-debug.apk
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Golf-Scorecard-Offline-v213-public-ready-debug-apks
+          name: Golf-Scorecard-Offline-v214-player-profile-scorecard-debug-apks
           path: release/*.apk
 
       - name: Commit APKs to release folder
@@ -74,6 +74,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add release/Golf-Scorecard-Offline-Free-v1.21.0-v33-debug.apk release/Golf-Scorecard-Offline-Pro-v1.21.0-v33-debug.apk
-          git diff --cached --quiet && echo "No APK changes to commit" || git commit -m "Add latest V2.13 public-ready free and pro APKs [skip ci]"
+          git add release/Golf-Scorecard-Offline-Free-v1.22.0-v34-debug.apk release/Golf-Scorecard-Offline-Pro-v1.22.0-v34-debug.apk
+          git diff --cached --quiet && echo "No APK changes to commit" || git commit -m "Add V2.14 player profile scorecard APKs [skip ci]"
           git push
